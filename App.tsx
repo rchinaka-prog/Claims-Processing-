@@ -1,6 +1,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { UserRole, AuthSession } from './types';
+import { supabase } from './lib/supabase';
+import { signOutUser } from './lib/auth';
 import CustomerDashboard from './components/CustomerDashboard';
 import AssessorDashboard from './components/AssessorDashboard';
 import RepairPartnerDashboard from './components/RepairPartnerDashboard';
@@ -122,36 +124,77 @@ const App: React.FC = () => {
   const [fieldSyncMode, setFieldSyncMode] = useState<{ active: boolean, claimId: string }>({ active: false, claimId: '' });
 
   useEffect(() => {
-    // Check for "Direct Link" / Field Sync Handover
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('mode') === 'field_sync') {
-      const email = params.get('email') || 'assessor@firstmutual.co.zw';
-      const claimId = params.get('claimId') || 'FIELD-NODE';
-      
-      // Auto-provision session for field sync
-      setSession({
-        user: {
-          id: `field-node-${Date.now()}`,
-          email: email,
-          phone: '0786413281',
-          full_name: 'FIELD OPERATOR',
-          role: UserRole.ASSESSOR,
-          created_at: new Date().toISOString()
-        }
-      });
-      setFieldSyncMode({ active: true, claimId });
-      // Clear URL params without reloading
-      window.history.replaceState({}, '', window.location.pathname);
-    } else {
-      const saved = localStorage.getItem('autoclaim_session');
-      if (saved) {
-        try {
-          setSession(JSON.parse(saved));
-        } catch (e) {
-          localStorage.removeItem('autoclaim_session');
+    const initializeAuth = async () => {
+      // Check for "Direct Link" / Field Sync Handover
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('mode') === 'field_sync') {
+        const email = params.get('email') || 'assessor@firstmutual.co.zw';
+        const claimId = params.get('claimId') || 'FIELD-NODE';
+
+        // Auto-provision session for field sync
+        setSession({
+          user: {
+            id: `field-node-${Date.now()}`,
+            email: email,
+            phone: '0786413281',
+            full_name: 'FIELD OPERATOR',
+            role: UserRole.ASSESSOR,
+            created_at: new Date().toISOString()
+          }
+        });
+        setFieldSyncMode({ active: true, claimId });
+        // Clear URL params without reloading
+        window.history.replaceState({}, '', window.location.pathname);
+      } else {
+        // Check Supabase auth state
+        const { data: { session: authSession } } = await supabase.auth.getSession();
+
+        if (authSession?.user) {
+          // Fetch user data from database
+          const { data: userData } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', authSession.user.id)
+            .maybeSingle();
+
+          if (userData) {
+            setSession({
+              user: {
+                id: userData.id,
+                email: userData.email,
+                phone: userData.phone,
+                full_name: userData.full_name,
+                role: userData.role as UserRole,
+                created_at: userData.created_at,
+              }
+            });
+          }
+        } else {
+          // Try localStorage as fallback
+          const saved = localStorage.getItem('autoclaim_session');
+          if (saved) {
+            try {
+              setSession(JSON.parse(saved));
+            } catch (e) {
+              localStorage.removeItem('autoclaim_session');
+            }
+          }
         }
       }
-    }
+    };
+
+    initializeAuth();
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, authSession) => {
+      if (!authSession) {
+        setSession(null);
+      }
+    });
+
+    return () => {
+      subscription?.unsubscribe();
+    };
   }, []);
 
   const addNotification = (n: Notification) => {
@@ -223,13 +266,15 @@ const App: React.FC = () => {
   const handleLogin = (newSession: AuthSession, rememberMe: boolean) => {
     setSession(newSession);
     if (rememberMe) {
-      localStorage.setItem('autoclaim_session', JSON.stringify(newSession));
-    } else {
-      localStorage.removeItem('autoclaim_session');
+      localStorage.setItem('aims_remembered_user', JSON.stringify({
+        email: newSession.user.email,
+        role: newSession.user.role
+      }));
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await signOutUser();
     setSession(null);
     setFieldSyncMode({ active: false, claimId: '' });
     localStorage.removeItem('autoclaim_session');

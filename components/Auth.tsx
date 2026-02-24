@@ -2,9 +2,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { UserRole, AuthSession } from '../types';
 import { Button, Card, Logo } from './Shared';
-import { 
-  User as UserIcon, Mail, Lock, 
-  ChevronDown, Eye, EyeOff, 
+import { signUpUser, signInUser } from '../lib/auth';
+import {
+  User as UserIcon, Mail, Lock,
+  ChevronDown, Eye, EyeOff,
   Loader2, Fingerprint, UserCircle, ClipboardList, Wrench, BarChart3, Users,
   Check, RefreshCw, ArrowLeft, ExternalLink, ShieldAlert, MailCheck, X as XIcon, Zap, Smartphone
 } from 'lucide-react';
@@ -123,28 +124,67 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     setPasswordStrength({ score, label: val.length < 8 ? 'Too Short' : labels[score] });
   };
 
+  const [authError, setAuthError] = useState<string | null>(null);
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAuthError(null);
+
     if (view !== 'phoneLogin' && captchaInput.toUpperCase() !== captchaChallenge) {
-      alert("Invalid CAPTCHA. Please try again.");
+      setAuthError("Invalid CAPTCHA. Please try again.");
       generateCaptcha();
       return;
     }
+
     setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setLoading(false);
-    if (view === 'phoneLogin') {
-      if (!otpSent) {
-        setOtpSent(true);
+
+    try {
+      if (view === 'phoneLogin') {
+        if (!otpSent) {
+          setOtpSent(true);
+          setLoading(false);
+          return;
+        }
+        completeLogin();
+        setLoading(false);
         return;
       }
-      completeLogin();
-      return;
-    }
-    if (role === UserRole.CUSTOMER) {
-      setShow2FA(true);
-    } else {
-      completeLogin();
+
+      if (view === 'signup') {
+        const result = await signUpUser(email, password, fullName, phoneNumber || '', role);
+        if (result.error) {
+          setAuthError(result.error);
+          setLoading(false);
+          return;
+        }
+        if (result.session) {
+          if (rememberMe) {
+            localStorage.setItem('aims_remembered_user', JSON.stringify({ email, role }));
+          }
+          onLogin(result.session, rememberMe);
+        }
+      } else {
+        const result = await signInUser(email, password);
+        if (result.error) {
+          setAuthError(result.error);
+          setLoading(false);
+          return;
+        }
+        if (result.session) {
+          if (role === UserRole.CUSTOMER) {
+            setShow2FA(true);
+          } else {
+            if (rememberMe) {
+              localStorage.setItem('aims_remembered_user', JSON.stringify({ email, role }));
+            }
+            onLogin(result.session, rememberMe);
+          }
+        }
+      }
+    } catch (error) {
+      setAuthError('An unexpected error occurred');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -340,6 +380,11 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                 <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mt-2">Authorized Access Desk</p>
               </div>
               <div className="space-y-4">
+                {authError && (
+                  <div className="bg-red-50 border-2 border-[#E31B23] rounded-xl p-4">
+                    <p className="text-[10px] font-black text-[#E31B23] uppercase tracking-wider">{authError}</p>
+                  </div>
+                )}
                 <div className="relative" ref={dropdownRef}>
                   <label className="text-[8px] font-black uppercase text-zinc-400 tracking-widest mb-1 block">Role Identity</label>
                   <button type="button" onClick={() => setIsRoleDropdownOpen(!isRoleDropdownOpen)} className={`w-full bg-zinc-50 border-2 py-4 pl-12 pr-10 text-[11px] font-black uppercase tracking-widest text-black outline-none transition-all flex items-center gap-3 ${isRoleDropdownOpen ? 'border-[#E31B23] bg-white' : 'border-zinc-100'}`}>
