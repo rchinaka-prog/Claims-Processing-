@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { Card, Button, Badge, NeuralFeed, QRCodeUI } from './Shared';
+import { aimsApi } from '../src/services/aimsApi';
 import { 
   BarChart3, Activity, AlertTriangle, ShieldAlert, 
   MapPin, TrendingUp, TrendingDown, Users,
@@ -12,7 +13,7 @@ import {
   MailCheck, ShieldQuestion, Send, Check, Smartphone, MessageCircle, MessageSquare, QrCode, User,
   FileSpreadsheet, FileJson, Archive, Target, LayoutGrid, Fingerprint, Lock, ShieldEllipsis, AtSign, LogOut,
   Info, ArrowRightLeft, UserMinus, UserPlus, AlertOctagon, MailWarning, History, Flag, Search, Database, HardDrive, FileUp,
-  UserRoundPlus, ShieldPlus, UserSearch, Scale, ShieldQuestion as ShieldQ, FileWarning
+  UserRoundPlus, ShieldPlus, UserSearch, Scale, ShieldQuestion as ShieldQ, FileWarning, Terminal
 } from 'lucide-react';
 
 interface InterventionLog {
@@ -65,8 +66,8 @@ const RecruitNodeModal: React.FC<{
               <UserRoundPlus size={24} className="text-[#E31B23]" />
             </div>
             <div>
-              <h3 className="text-sm font-black uppercase tracking-widest leading-none">Recruit AIMS Node</h3>
-              <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mt-1.5 italic">Provisioning New Network Entity</p>
+              <h3 className="text-sm font-black uppercase tracking-widest leading-none">Add New Staff</h3>
+              <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mt-1.5 italic">Adding new member to the system</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors"><X size={24} /></button>
@@ -75,7 +76,7 @@ const RecruitNodeModal: React.FC<{
         <div className="p-10 space-y-8 bg-slate-50/30">
           <div className="space-y-6">
             <div className="space-y-2">
-              <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1 italic">Node Role</label>
+              <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1 italic">Staff Role</label>
               <div className="grid grid-cols-3 gap-3">
                 {['Support', 'Assessor', 'Repair Partner'].map(r => (
                   <button 
@@ -91,7 +92,7 @@ const RecruitNodeModal: React.FC<{
             </div>
 
             <div className="space-y-2">
-              <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1 italic">Legal Identity (Name)</label>
+              <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1 italic">Full Name</label>
               <div className="relative group">
                 <UserSearch className="absolute left-5 top-1/2 -translate-y-1/2 text-zinc-300 group-focus-within:text-[#E31B23]" size={18} />
                 <input 
@@ -201,6 +202,98 @@ const EmailDraftModal: React.FC<{
   );
 };
 
+const BatchProcessModal: React.FC<{ 
+  onClose: () => void, 
+  progress: number,
+  logs: string[],
+  isComplete: boolean,
+  stats: { total: number, dispatched: number }
+}> = ({ onClose, progress, logs, isComplete, stats }) => {
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [logs]);
+
+  return (
+    <div className="fixed inset-0 z-[900] flex items-center justify-center p-6 bg-black/90 backdrop-blur-xl animate-in fade-in duration-500">
+      <Card className="w-full max-w-2xl bg-zinc-950 border-zinc-800 rounded-[40px] shadow-[0_0_100px_rgba(227,27,35,0.15)] overflow-hidden flex flex-col max-h-[85vh]">
+        <div className="p-10 border-b border-white/5 flex justify-between items-center">
+          <div className="flex items-center gap-6">
+            <div className="w-16 h-16 bg-zinc-900 rounded-2xl flex items-center justify-center text-[#E31B23] border border-white/5 shadow-2xl relative">
+              <RefreshCcw size={28} className={!isComplete ? "animate-spin" : ""} />
+              {isComplete && <div className="absolute -top-1 -right-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center border-2 border-zinc-950"><Check size={12} className="text-white" /></div>}
+            </div>
+            <div>
+              <h3 className="text-xl font-black uppercase tracking-tighter text-white italic">Batch Renewal Engine</h3>
+              <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-1.5 italic">AIMS Automated Dispatch Protocol</p>
+            </div>
+          </div>
+          {isComplete && (
+            <button onClick={onClose} className="p-3 hover:bg-white/5 rounded-full transition-colors text-zinc-500 hover:text-white"><X size={24} /></button>
+          )}
+        </div>
+
+        <div className="flex-1 p-10 space-y-10 overflow-hidden flex flex-col">
+          <div className="space-y-4">
+            <div className="flex justify-between items-end px-1">
+              <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest italic">Process Velocity</span>
+              <span className="text-2xl font-black italic text-white">{progress}%</span>
+            </div>
+            <div className="h-3 bg-zinc-900 rounded-full overflow-hidden border border-white/5">
+              <div 
+                className="h-full bg-[#E31B23] transition-all duration-300 shadow-[0_0_20px_rgba(227,27,35,0.4)]" 
+                style={{ width: `${progress}%` }} 
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-6">
+            <div className="p-6 bg-white/5 border border-white/5 rounded-3xl space-y-2">
+              <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest italic">Policies Flagged</p>
+              <p className="text-3xl font-black italic text-white">{stats.total}</p>
+            </div>
+            <div className="p-6 bg-white/5 border border-white/5 rounded-3xl space-y-2">
+              <p className="text-[9px] font-black text-zinc-500 uppercase tracking-widest italic">Dispatched</p>
+              <p className="text-3xl font-black italic text-[#E31B23]">{stats.dispatched}</p>
+            </div>
+          </div>
+
+          <div className="flex-1 bg-black rounded-3xl border border-white/5 p-6 font-mono text-[10px] overflow-hidden flex flex-col shadow-inner">
+            <div className="flex items-center gap-3 mb-4 text-zinc-500 border-b border-white/5 pb-3">
+              <Terminal size={14} />
+              <span className="uppercase tracking-widest font-black italic">System Telemetry</span>
+            </div>
+            <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-2 custom-scrollbar pr-2">
+              {logs.map((log, i) => (
+                <div key={i} className="flex gap-4 animate-in slide-in-from-left-2 duration-300">
+                  <span className="text-[#E31B23] opacity-50">[{new Date().toLocaleTimeString([], { hour12: false })}]</span>
+                  <span className={log.includes('SUCCESS') ? 'text-green-500' : log.includes('ERROR') ? 'text-red-500' : 'text-zinc-400'}>
+                    {log}
+                  </span>
+                </div>
+              ))}
+              {!isComplete && <div className="w-1.5 h-4 bg-white/20 animate-pulse inline-block ml-1" />}
+            </div>
+          </div>
+        </div>
+
+        <div className="p-10 bg-white/5 border-t border-white/5 flex justify-end">
+          <Button 
+            disabled={!isComplete} 
+            onClick={onClose}
+            className={`h-14 px-12 text-[10px] font-black italic rounded-2xl transition-all ${isComplete ? 'bg-[#E31B23] text-white shadow-2xl' : 'bg-zinc-800 text-zinc-500'}`}
+          >
+            {isComplete ? 'CLOSE CONSOLE' : 'PROCESSING...'}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+};
+
 interface ManagementDashboardProps {
   onLogout: () => void;
 }
@@ -216,18 +309,37 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
   const [dbStatus, setDbStatus] = useState<'nominal' | 'scanning' | 'error' | null>('nominal');
   const [isSendingReminders, setIsSendingReminders] = useState(false);
   const [reminderProgress, setReminderProgress] = useState(0);
-  const [handshakeLogs, setHandshakeLogs] = useState<string[]>(["Management Node Ready.", "AIMS Network Stable."]);
+  const [batchLogs, setBatchLogs] = useState<string[]>([]);
+  const [batchStats, setBatchStats] = useState({ total: 412, dispatched: 0 });
+  const [isBatchComplete, setIsBatchComplete] = useState(false);
+  const [handshakeLogs, setHandshakeLogs] = useState<string[]>(["Management System Ready.", "System Stable."]);
 
-  const [staff, setStaff] = useState<StaffMember[]>([
-    { id: 'ST-001', name: 'Angela Davids', role: 'Support', rating: 4.9, totalClaims: 820, email: 'angela.d@firstmutual.co.zw', avatar: 'AD', load: 85, complianceStatus: 'COMPLIANT', interventions: [] },
-    { id: 'ST-002', name: 'Marcus Flint', role: 'Assessor', rating: 4.8, totalClaims: 142, email: 'marcus.f@firstmutual.co.zw', avatar: 'MF', load: 40, complianceStatus: 'COMPLIANT', interventions: [] },
-    { id: 'ST-003', name: 'Terrence Moyo', role: 'Support', rating: 4.7, totalClaims: 512, email: 'terrence.m@firstmutual.co.zw', avatar: 'TM', load: 60, complianceStatus: 'SLA_VIOLATION', interventions: [] },
-    { id: 'ST-004', name: 'Sarah Jenkins', role: 'Support', rating: 4.9, totalClaims: 640, email: 'marcus.f@firstmutual.co.zw', avatar: 'SJ', load: 30, complianceStatus: 'COMPLIANT', interventions: [] },
-    { id: 'RP-005', name: 'City Auto Elite', role: 'Repair Partner', rating: 4.9, totalClaims: 110, email: 'workshop@cityauto.co.zw', avatar: 'CA', load: 80, complianceStatus: 'KYC_PENDING', interventions: [] },
-    { id: 'RP-006', name: 'Westside Bodywork', role: 'Repair Partner', rating: 4.2, totalClaims: 85, email: 'ops@westside.co.zw', avatar: 'WB', load: 45, complianceStatus: 'AUDIT_REQUIRED', interventions: [] }
-  ]);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [stats, setStats] = useState<any>(null);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [staffData, statsData, auditLogs] = await Promise.all([
+          aimsApi.staff.getAll(),
+          aimsApi.system.getStats(),
+          aimsApi.system.getAuditLogs()
+        ]);
+        setStaff(staffData);
+        setStats(statsData);
+        const formattedLogs = auditLogs.slice(0, 20).map((log: any) => 
+          `${log.action}: ${JSON.stringify(log.details)}`
+        );
+        setHandshakeLogs(prev => [...prev, ...formattedLogs]);
+      } catch (e) {
+        console.error("Failed to fetch management data", e);
+      }
+    };
+    fetchData();
+  }, []);
 
   const complianceScore = useMemo(() => {
+    if (staff.length === 0) return 0;
     const compliantCount = staff.filter(s => s.complianceStatus === 'COMPLIANT').length;
     return Math.round((compliantCount / staff.length) * 100);
   }, [staff]);
@@ -235,7 +347,7 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
   const checkDatabaseIntegrity = async () => {
     setIsCheckingDatabase(true);
     setDbStatus('scanning');
-    setHandshakeLogs(prev => [...prev, "Initiating global integrity audit...", "Scanning claim nodes..."]);
+    setHandshakeLogs(prev => [...prev, "Initiating global audit...", "Scanning claims..."]);
     
     for(let i = 0; i < 5; i++) {
       await new Promise(r => setTimeout(r, 600));
@@ -250,28 +362,59 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
 
   const sendRenewalReminders = async () => {
     setIsSendingReminders(true);
+    setIsBatchComplete(false);
     setReminderProgress(0);
-    setHandshakeLogs(prev => [...prev, "Triggering batch renewal reminders...", "Awaiting AI drafting..."]);
+    setBatchStats({ total: 412, dispatched: 0 });
+    setBatchLogs(["Initializing Batch Engine...", "Authenticating with FirstMutual SMTP...", "Scanning Policy Registry..."]);
     
-    const interval = setInterval(() => {
-      setReminderProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          return 100;
-        }
-        return prev + 10;
-      });
-    }, 400);
+    // Stage 1: Scanning
+    await new Promise(r => setTimeout(r, 1000));
+    setBatchLogs(prev => [...prev, "Found 412 policies expiring within 30 days.", "Compiling recipient list..."]);
+    setReminderProgress(15);
 
-    await new Promise(r => setTimeout(r, 4500));
-    setHandshakeLogs(prev => [...prev, "412 Reminders dispatched via FirstMutual SMTP.", "Policy holders notified."]);
-    setIsSendingReminders(false);
+    // Stage 2: Processing in chunks
+    const policies = ['ND-GOLD-9921', 'ND-SILVER-4401', 'ND-BRONZE-1102', 'ND-GOLD-8821', 'ND-PLAT-1022'];
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 400));
+      const policy = policies[i % policies.length];
+      const dispatchedCount = Math.min(412, Math.round((i + 1) * 41.2));
+      setBatchStats(prev => ({ ...prev, dispatched: dispatchedCount }));
+      setBatchLogs(prev => [...prev, `DISPATCH SUCCESS: Reminder sent to holder of ${policy}...`]);
+      setReminderProgress(15 + Math.round((i + 1) * 7.5));
+    }
+
+    // Stage 3: Finalizing
+    setBatchLogs(prev => [...prev, "Finalizing batch transmission...", "Verifying delivery receipts..."]);
+    setReminderProgress(95);
+    await new Promise(r => setTimeout(r, 1000));
+    
+    setReminderProgress(100);
+    setBatchStats({ total: 412, dispatched: 412 });
+    setBatchLogs(prev => [...prev, "BATCH COMPLETE: 412 Reminders dispatched.", "System log updated."]);
+    setIsBatchComplete(true);
+    setHandshakeLogs(prev => [...prev, "Batch renewal reminders dispatched successfully.", "412 holders notified."]);
   };
 
-  const downloadReport = (type: string) => {
+  const downloadReport = async (type: string) => {
     setHandshakeLogs(prev => [...prev, `Compiling ${type} report...`, "Generating archive..."]);
-    const data = { type, timestamp: new Date().toISOString(), stats: { total_claims: 12840, renewals: 412 } };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    
+    let reportData: any = { type, timestamp: new Date().toISOString() };
+    
+    try {
+      if (type === 'Claims Registry') {
+        const response = await fetch('/api/claims');
+        if (response.ok) {
+          reportData.claims = await response.json();
+        }
+      } else {
+        reportData.stats = { total_claims: 12840, renewals: 412 };
+      }
+    } catch (error) {
+      console.error("Failed to fetch report data:", error);
+      reportData.error = "Data fetch failed";
+    }
+
+    const blob = new Blob([JSON.stringify(reportData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -284,27 +427,26 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
 
   const handleRecruit = async (nodeData: Partial<StaffMember>) => {
     setIsRecruiting(true);
-    setHandshakeLogs(prev => [...prev, `Provisioning ${nodeData.role} node for ${nodeData.name}...`]);
+    setHandshakeLogs(prev => [...prev, `Adding ${nodeData.role} member: ${nodeData.name}...`]);
     
-    await new Promise(r => setTimeout(r, 2000));
-    
-    const newNode: StaffMember = {
-      id: `ST-${Math.floor(Math.random() * 1000)}`,
-      name: nodeData.name!,
-      role: nodeData.role!,
-      email: nodeData.email!,
-      avatar: nodeData.name!.split(' ').map(n => n[0]).join('').toUpperCase(),
-      rating: 5.0,
-      totalClaims: 0,
-      load: 0,
-      complianceStatus: 'COMPLIANT',
-      interventions: []
-    };
-
-    setStaff(prev => [newNode, ...prev]);
-    setHandshakeLogs(prev => [...prev, `Node ${newNode.id} successfully joined AIMS network.`, `Welcome email dispatched to ${newNode.email}.`]);
-    setIsRecruiting(false);
-    setShowRecruitModal(false);
+    try {
+      const res = await fetch('/api/staff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nodeData)
+      });
+      
+      if (res.ok) {
+        const newNode = await res.json();
+        setStaff(prev => [newNode, ...prev]);
+        setHandshakeLogs(prev => [...prev, `Node ${newNode.id} successfully joined AIMS network.`, `Welcome email dispatched to ${newNode.email}.`]);
+      }
+    } catch (e) {
+      console.error("Failed to recruit node", e);
+    } finally {
+      setIsRecruiting(false);
+      setShowRecruitModal(false);
+    }
   };
 
   const initiateComplianceAudit = (staffId: string) => {
@@ -315,7 +457,7 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
       to: s.email,
       cc: 'compliance@firstmutual.co.zw',
       subject: `MANDATORY AUDIT: Regulatory Protocol Violation [${s.id}]`,
-      body: `Dear ${s.name},\n\nYour operational node ${s.id} has triggered a compliance flag: ${s.complianceStatus}.\n\nA formal technical review is now mandatory. Please upload all missing documentation to the AIMS Vault immediately.`,
+      body: `Dear ${s.name},\n\nYour account ${s.id} has triggered a compliance flag: ${s.complianceStatus}.\n\nA formal review is now mandatory. Please upload all missing documentation immediately.`,
       isUrgent: true
     };
     setActiveEmailDraft(draft);
@@ -329,7 +471,7 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
       to: s.email,
       cc: 'ops@firstmutual.co.zw',
       subject: `System Advisory: Operational Review [${s.id}]`,
-      body: `Dear ${s.name},\n\nWe are conducting a routine review of operational node ${s.id}. Your current load is indexed at ${s.load}%.\n\nPlease ensure all pending handshakes are finalized before the daily ledger close.`,
+      body: `Dear ${s.name},\n\nWe are conducting a routine review of staff member ${s.id}. Your current load is at ${s.load}%.\n\nPlease ensure all pending approvals are finalized before the daily system close.`,
       isUrgent: true
     };
     setActiveEmailDraft(draft);
@@ -339,21 +481,30 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
     setIsIntervening(true);
     setHandshakeLogs(prev => [...prev, `Encrypting advisory for ${draft.to}...`, "Pushing via SMTP cluster..."]);
     
-    await new Promise(r => setTimeout(r, 1500));
-    
-    setStaff(prev => prev.map(s => s.id === draft.staffId ? { 
-      ...s, 
-      interventions: [{ 
-        id: 'INT-'+Date.now(), 
-        timestamp: new Date().toISOString(), 
-        type: draft.subject.includes('AUDIT') ? 'Compliance Audit' : 'Performance Email', 
-        subject: draft.subject 
-      }, ...s.interventions] 
-    } : s));
-    
-    setHandshakeLogs(prev => [...prev, `Advisory ${draft.subject} successfully dispatched.`]);
-    setIsIntervening(false);
-    setActiveEmailDraft(null);
+    try {
+      const res = await fetch(`/api/staff/${draft.staffId}/interventions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: draft.subject.includes('AUDIT') ? 'Compliance Audit' : 'Performance Email',
+          subject: draft.subject
+        })
+      });
+
+      if (res.ok) {
+        const intervention = await res.json();
+        setStaff(prev => prev.map(s => s.id === draft.staffId ? { 
+          ...s, 
+          interventions: [intervention, ...s.interventions] 
+        } : s));
+        setHandshakeLogs(prev => [...prev, `Advisory ${draft.subject} successfully dispatched.`]);
+      }
+    } catch (e) {
+      console.error("Failed to send intervention", e);
+    } finally {
+      setIsIntervening(false);
+      setActiveEmailDraft(null);
+    }
   };
 
   return (
@@ -413,14 +564,24 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
           />
         )}
 
+        {isSendingReminders && (
+          <BatchProcessModal 
+            onClose={() => setIsSendingReminders(false)}
+            progress={reminderProgress}
+            logs={batchLogs}
+            isComplete={isBatchComplete}
+            stats={batchStats}
+          />
+        )}
+
         {activeView === 'overview' && (
           <div className="space-y-10 md:space-y-14 animate-in fade-in duration-500">
             {/* Quick Stats */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
               {[
-                { label: 'Network Operations', val: '1,422', icon: <Activity size={20}/>, color: 'text-blue-500' },
+                { label: 'Network Operations', val: stats?.totalClaims || '...', icon: <Activity size={20}/>, color: 'text-blue-500' },
                 { label: 'Avg Payout Cycle', val: '8.4 DAYS', icon: <Timer size={20}/>, color: 'text-[#E31B23]' },
-                { label: 'Settlement Liquidity', val: '$2.14M', icon: <DollarSign size={20}/>, color: 'text-green-500' },
+                { label: 'Settlement Liquidity', val: stats ? `$${(stats.totalPayout / 1000000).toFixed(2)}M` : '...', icon: <DollarSign size={20}/>, color: 'text-green-500' },
                 { label: 'Compliance Rating', val: `${complianceScore}%`, icon: <ShieldCheck size={20}/>, color: 'text-zinc-400' },
               ].map((stat, i) => (
                 <Card key={i} className="p-8 border-none shadow-xl bg-white rounded-[32px] flex flex-col justify-between hover:scale-[1.02] transition-all group">

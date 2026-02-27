@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { Card, Button, Badge, ProgressSteps, PayPalSecureBridge, QRCodeUI, NeuralFeed } from './Shared';
+import { Card, Button, Badge, ProgressSteps, PaymentBridge, QRCodeUI, NeuralFeed } from './Shared';
 import { 
   Truck, Activity, Inbox, PlusCircle, Shield, 
   DollarSign, Camera, X, Loader2, Send, 
@@ -12,8 +12,11 @@ import {
   Plus, Image as ImageIcon, ShieldQuestion, FileUp
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
+import { AuthSession } from '../types';
+import { aimsApi } from '../src/services/aimsApi';
 
 interface CustomerDashboardProps {
+  session: AuthSession;
   activeTab: string;
   onTabChange: (tab: any) => void;
   onLogout: () => void;
@@ -161,8 +164,8 @@ const RatingModal: React.FC<{
   );
 };
 
-const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ activeTab, onTabChange, onLogout }) => {
-  const [showPayPalBridge, setShowPayPalBridge] = useState(false);
+const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ session, activeTab, onTabChange, onLogout }) => {
+  const [showPaymentBridge, setShowPaymentBridge] = useState(false);
   const [isTopUpPaid, setIsTopUpPaid] = useState(false);
   const [isClaimClosed, setIsClaimClosed] = useState(false);
   const [showRatingModal, setShowRatingModal] = useState(false);
@@ -170,24 +173,24 @@ const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ activeTab, onTabC
   const [messageToDelete, setMessageToDelete] = useState<string | null>(null);
   const [showSyncModal, setShowSyncModal] = useState(false);
   
-  const [handshakeLogs, setHandshakeLogs] = useState<string[]>([
-    "Handshake verified.",
-    "Keys established.",
+  const [syncLogs, setSyncLogs] = useState<string[]>([
+    "Connection verified.",
+    "Security established.",
     "Link active."
   ]);
 
   useEffect(() => {
     if (activeTab !== 'track') return;
     const phrases = [
-      "Verifying signature...",
-      "Syncing nodes...",
-      "Neural audit cycle...",
-      "Packet verification...",
-      "Token refreshed...",
-      "Asset geolocation verified."
+      "Verifying identity...",
+      "Syncing data...",
+      "Checking claim status...",
+      "Verifying files...",
+      "Session refreshed...",
+      "Location verified."
     ];
     const interval = setInterval(() => {
-      setHandshakeLogs(prev => {
+      setSyncLogs(prev => {
         const next = [...prev, phrases[Math.floor(Math.random() * phrases.length)]];
         if (next.length > 20) return next.slice(next.length - 20);
         return next;
@@ -242,20 +245,35 @@ const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ activeTab, onTabC
     holderEmail: 'john.doe@firstmutual.co.zw'
   };
 
-  const activeClaim = {
-    id: 'CLM-9901',
-    status: isClaimClosed ? 'Closed' : (isTopUpPaid ? 'Restored' : 'Awaiting Settlement'),
-    vehicle: '2022 BMW M3',
-    currentStage: isClaimClosed ? 4 : (isTopUpPaid ? 3 : 2),
-    steps: ["Reported", "Audit", "Approved", "Done"],
-    topUpRequired: 1150,
-    repairer: { name: 'City Auto Elite' },
-    assignedAssessor: { name: 'Marcus Flint', status: 'Verified', id: 'AS-882', phone: '0786413281' },
-    repairEvidence: [
-      { id: 'ev1', title: 'Teardown', description: 'Chassis alignment verified.', date: '2h ago', photos: [] },
-      { id: 'ev2', title: 'Parts', description: 'OEM Front Radiator verified.', date: '5h ago', photos: [] }
-    ]
-  };
+  const [activeClaim, setActiveClaim] = useState<any>(null);
+
+  useEffect(() => {
+    const fetchActiveClaim = async () => {
+      try {
+        const data = await aimsApi.claims.getAll();
+        if (data.length > 0) {
+          const claim = data[0];
+          setActiveClaim({
+              id: claim.id,
+              status: isClaimClosed ? 'Closed' : (isTopUpPaid ? 'Restored' : (claim.status === 'Approved' ? 'Awaiting Settlement' : claim.status)),
+              vehicle: claim.vehicle || claim.car,
+              currentStage: isClaimClosed ? 4 : (isTopUpPaid ? 3 : (claim.status === 'Approved' ? 2 : 1)),
+              steps: ["Reported", "Audit", "Approved", "Done"],
+              topUpRequired: 1150,
+              repairer: { name: claim.repairer || 'City Auto Elite' },
+              assignedAssessor: { name: 'Marcus Flint', status: 'Verified', id: 'AS-882', phone: '0786413281' },
+              repairEvidence: [
+                { id: 'ev1', title: 'Teardown', description: 'Chassis alignment verified.', date: '2h ago', photos: [] },
+                { id: 'ev2', title: 'Parts', description: 'OEM Front Radiator verified.', date: '5h ago', photos: [] }
+              ]
+            });
+          }
+      } catch (error) {
+        console.error("Failed to fetch active claim:", error);
+      }
+    };
+    fetchActiveClaim();
+  }, [isTopUpPaid, isClaimClosed]);
 
   const handleFileUpload = (
     e: React.ChangeEvent<HTMLInputElement>, 
@@ -342,6 +360,15 @@ const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ activeTab, onTabC
   };
 
   const isSubmitReady = explanation.length > 20 && accidentDate !== '' && policeReport && registrationDoc && damagedPhotos.length > 0;
+
+  if (!activeClaim) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-10 space-y-6 min-h-screen">
+        <Loader2 size={48} className="animate-spin text-[#E31B23]" />
+        <p className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.3em] italic">Initializing Secure Node...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-full bg-white px-4 md:px-10 py-6 md:py-10 max-w-7xl mx-auto space-y-6 md:space-y-10 overflow-x-hidden">
@@ -651,7 +678,7 @@ const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ activeTab, onTabC
                        <h3 className="text-base md:text-lg font-bold italic flex items-center justify-center sm:justify-start gap-3"><CreditCard size={18} md:size={20} className="text-[#E31B23]" /> Gap Contribution</h3>
                        <p className="text-[9px] md:text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Amount Authorized: $1,150.00</p>
                      </div>
-                     <Button onClick={() => setShowPayPalBridge(true)} className="bg-white text-black h-12 text-[9px] md:text-[10px] px-6 md:px-8 w-full sm:w-auto font-bold rounded-xl hover:bg-[#0070ba] hover:text-white">PAY SETTLEMENT</Button>
+                     <Button onClick={() => setShowPaymentBridge(true)} className="bg-white text-black h-12 text-[9px] md:text-[10px] px-6 md:px-8 w-full sm:w-auto font-bold rounded-xl hover:bg-[#635bff] hover:text-white">PAY SETTLEMENT</Button>
                    </div>
                  )}
                  {isTopUpPaid && !isClaimClosed && (
@@ -695,7 +722,7 @@ const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ activeTab, onTabC
                 <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:rotate-6 transition-all duration-700 pointer-events-none"><Terminal size={120} md:size={140} /></div>
                 <div className="relative z-10 space-y-4 md:space-y-6">
                   <h3 className="text-[9px] md:text-[10px] font-bold uppercase tracking-widest flex items-center gap-3 italic text-zinc-400"><Zap size={14} md:size={16} className="text-[#E31B23]" /> Pulse</h3>
-                  <NeuralFeed logs={handshakeLogs} />
+                  <NeuralFeed logs={syncLogs} />
                 </div>
               </Card>
               <Card className="p-6 md:p-8 bg-white border-zinc-100 rounded-[24px] md:rounded-[32px] space-y-4 md:space-y-6 shadow-lg">
@@ -838,7 +865,17 @@ const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ activeTab, onTabC
         </div>
       )}
 
-      {showPayPalBridge && <PayPalSecureBridge amount="$1,150.00" to={activeClaim.repairer.name} onSuccess={() => { setIsTopUpPaid(true); setShowPayPalBridge(false); }} onCancel={() => setShowPayPalBridge(false)} />}
+      {showPaymentBridge && (
+        <PaymentBridge 
+          amount="$1,150.00" 
+          to={activeClaim.repairer.name} 
+          claimId={activeClaim.id}
+          customerName={session.user.full_name}
+          onSuccess={() => { setIsTopUpPaid(true); setShowPaymentBridge(false); }} 
+          onCancel={() => setShowPaymentBridge(false)} 
+          title="Gap Contribution"
+        />
+      )}
     </div>
   );
 };

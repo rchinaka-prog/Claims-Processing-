@@ -1,0 +1,10 @@
+{
+  "staff": [
+    { "id": "ST-001", "name": "Angela Davids", "role": "Support", "rating": 4.9, "totalClaims": 820, "email": "angela.d@firstmutual.co.zw", "avatar": "AD", "load": 85, "complianceStatus": "COMPLIANT", "interventions": [] },
+    { "id": "ST-002", "name": "Marcus Flint", "role": "Assessor", "rating": 4.8, "totalClaims": 142, "email": "marcus.f@firstmutual.co.zw", "avatar": "MF", "load": 40, "complianceStatus": "COMPLIANT", "interventions": [] },
+    { "id": "ST-003", "name": "Terrence Moyo", "role": "Support", "rating": 4.7, "totalClaims": 512, "email": "terrence.m@firstmutual.co.zw", "avatar": "TM", "load": 60, "complianceStatus": "SLA_VIOLATION", "interventions": [] },
+    { "id": "ST-004", "name": "Sarah Jenkins", "role": "Support", "rating": 4.9, "totalClaims": 640, "email": "sarah.j@firstmutual.co.zw", "avatar": "SJ", "load": 30, "complianceStatus": "COMPLIANT", "interventions": [] },
+    { "id": "RP-005", "name": "City Auto Elite", "role": "Repair Partner", "rating": 4.9, "totalClaims": 110, "email": "workshop@cityauto.co.zw", "avatar": "CA", "load": 80, "complianceStatus": "KYC_PENDING", "interventions": [] },
+    { "id": "RP-006", "name": "Westside Bodywork", "role": "Repair Partner", "rating": 4.2, "totalClaims": 85, "email": "ops@westside.co.zw", "avatar": "WB", "load": 45, "complianceStatus": "AUDIT_REQUIRED", "interventions": [] }
+  ]
+}

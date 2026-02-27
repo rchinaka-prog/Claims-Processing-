@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Button, Badge, PayPalSecureBridge } from './Shared';
+import { Card, Button, Badge, PaymentBridge } from './Shared';
 import LiveChat from './LiveChat';
+import { aimsApi } from '../src/services/aimsApi';
 import { 
   UserCog, Phone, X, AlertTriangle, 
   ChevronRight, Search, Filter, 
@@ -15,13 +16,20 @@ import {
 import type { Notification } from './Shared';
 import { AuthSession } from '../types';
 
+interface ClaimNote {
+  id: string;
+  text: string;
+  timestamp: string;
+  visibleToRepairer: boolean;
+}
+
 interface SupportClaim {
   id: string;
   customer: string;
   customerPhone: string;
   vehicle: string;
   regNo: string;
-  status: 'Reviewing' | 'Approved' | 'Finished' | 'Stagnant' | 'Documents Pending' | 'Submitted';
+  status: 'Reviewing' | 'Approved' | 'Finished' | 'Stagnant' | 'Documents Pending' | 'Submitted' | 'Settled';
   priority: 'HIGH' | 'MEDIUM' | 'LOW';
   date: string;
   submittedAt: string; // ISO string for deadline tracking
@@ -41,6 +49,7 @@ interface SupportClaim {
   negotiationPending?: boolean;
   requestedAmount?: number;
   completionPhotos?: string[];
+  notes?: ClaimNote[];
 }
 
 interface StaffMessage {
@@ -61,25 +70,48 @@ const assessors = [
 
 const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab, onTabChange, addNotification, onLogout }) => {
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
-  const [showPayPalBridge, setShowPayPalBridge] = useState(false);
+  const [showPaymentBridge, setShowPaymentBridge] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [priorityFilter, setPriorityFilter] = useState<'ALL' | 'HIGH' | 'MEDIUM' | 'LOW'>('ALL');
   const [isAssigning, setIsAssigning] = useState(false);
   const [targetAssessorId, setTargetAssessorId] = useState('');
+  const [newNoteText, setNewNoteText] = useState('');
+  const [isNoteVisibleToRepairer, setIsNoteVisibleToRepairer] = useState(false);
+  const [isSavingNote, setIsSavingNote] = useState(false);
   
   const notifiedStagnantIds = useRef<Set<string>>(new Set());
   const lastKnownStatuses = useRef<Record<string, string>>({});
 
-  const [claimsQueue, setClaimsQueue] = useState<SupportClaim[]>([
-    { id: 'CL-9921', customer: 'John Doe', customerPhone: '0786413281', vehicle: 'BMW M3', regNo: 'ABC-123', status: 'Reviewing', priority: 'HIGH', date: '2024-05-15', submittedAt: '2026-02-19T10:00:00Z', type: 'Accident', amount: '$4,150', rawAmount: 4150, coverage: 3000, policyLimit: '$15,000', policyStatus: 'ACTIVE', repairer: 'City Auto Elite', insurancePaid: false, bottleneckReason: 'Variance Logged by Marcus Flint', progress: 45, consistencyIndex: 42, assessorFindings: "Impact damage does not match reverse collision into pillar. Structural warping suggests higher speed impact." },
-    { id: 'CL-9940', customer: 'Alice Wong', customerPhone: '0786413281', vehicle: 'Audi RS6', regNo: 'WONG-88', status: 'Reviewing', priority: 'MEDIUM', date: '2024-05-18', submittedAt: '2026-02-19T22:30:00Z', type: 'Accident', amount: '$8,200', rawAmount: 8200, coverage: 8200, policyLimit: '$15,000', policyStatus: 'ACTIVE', repairer: 'Westside Bodywork', insurancePaid: false, progress: 85, negotiationPending: true, requestedAmount: 9400, completionPhotos: [] },
-    { id: 'REC-8820', customer: 'Mark Thompson', customerPhone: '0786413281', vehicle: 'Mercedes GLC', regNo: 'ZBW-110', status: 'Stagnant', priority: 'HIGH', date: '2024-05-09', submittedAt: '2026-02-18T14:00:00Z', type: 'Vandalism', amount: '$2,400', rawAmount: 2400, coverage: 2000, policyLimit: '$20,000', policyStatus: 'ACTIVE', repairer: 'Central Motors', insurancePaid: false, bottleneckReason: 'Missing Police Abstract', progress: 10 }
-  ]);
+  const [claimsQueue, setClaimsQueue] = useState<SupportClaim[]>([]);
+
+  useEffect(() => {
+    const fetchClaims = async () => {
+      try {
+        const data = await aimsApi.claims.getAll();
+        // Map backend fields to SupportClaim fields if necessary
+        const mappedData = data.map((c: any) => ({
+          ...c,
+          customer: c.customer || c.owner,
+          customerPhone: c.phone,
+          vehicle: c.vehicle || c.car,
+          submittedAt: c.submittedAt || new Date().toISOString(),
+          status: c.status === 'PENDING_INSPECTION' ? 'Reviewing' : c.status,
+          rawAmount: c.coverage,
+          insurancePaid: c.insurancePaid || false,
+          progress: c.progress || 0
+        }));
+        setClaimsQueue(mappedData);
+      } catch (error) {
+        console.error("Failed to fetch claims:", error);
+      }
+    };
+    fetchClaims();
+  }, []);
 
   const [inboxMessages] = useState<StaffMessage[]>([
     { id: '1', user: 'John Doe', preview: 'When will my car be ready?', time: '2m ago', unread: true, avatar: 'JD' },
     { id: '2', user: 'Sarah Jenkins', preview: 'Uploaded report to portal.', time: '1h ago', unread: false, avatar: 'SJ' },
-    { id: '3', user: 'City Auto Elite', preview: 'Requesting budget handshake.', time: '3h ago', unread: true, avatar: 'CA' },
+    { id: '3', user: 'City Auto Elite', preview: 'Requesting budget approval.', time: '3h ago', unread: true, avatar: 'CA' },
   ]);
 
   const [now, setNow] = useState(new Date());
@@ -124,49 +156,162 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
     setIsAssigning(true);
     await new Promise(resolve => setTimeout(resolve, 1200));
     const assessor = assessors.find(a => a.id === targetAssessorId);
-    setClaimsQueue(prev => prev.map(c => 
-      c.id === selectedClaimId ? { ...c, assignedAssessor: assessor?.name, status: 'Reviewing', progress: 40 } : c
-    ));
-    addNotification({
-      id: `assign-${Date.now()}`,
-      title: "Assessor Assigned",
-      message: `${assessor?.name} has been assigned to claim ${selectedClaimId}.`,
-      type: 'success',
-      timestamp: new Date(),
-      isRead: false
-    });
+    try {
+      await fetch(`/api/claims/${selectedClaimId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignedAssessor: assessor?.name, status: 'Reviewing', progress: 40 })
+      });
+
+      setClaimsQueue(prev => prev.map(c => 
+        c.id === selectedClaimId ? { ...c, assignedAssessor: assessor?.name, status: 'Reviewing', progress: 40 } : c
+      ));
+      
+      addNotification({
+        id: `assign-${Date.now()}`,
+        title: "Assessor Assigned",
+        message: `${assessor?.name} has been assigned to claim ${selectedClaimId}.`,
+        type: 'success',
+        timestamp: new Date(),
+        isRead: false
+      });
+    } catch (error) {
+      console.error("Failed to assign assessor:", error);
+    }
     setTargetAssessorId('');
     setIsAssigning(false);
   };
 
   const approveNegotiation = async () => {
     if (!selectedClaimId || !selectedClaim) return;
-    setClaimsQueue(prev => prev.map(c => 
-      c.id === selectedClaimId ? { ...c, coverage: c.requestedAmount || c.coverage, amount: `$${(c.requestedAmount || 0).toLocaleString()}`, negotiationPending: false, status: 'Approved' } : c
-    ));
-    addNotification({
-      id: `neg-ok-${Date.now()}`,
-      title: "Negotiation Approved",
-      message: `Final repair sum for ${selectedClaimId} set to $${selectedClaim.requestedAmount?.toLocaleString()}.`,
-      type: 'success',
-      timestamp: new Date(),
-      isRead: false
-    });
+    
+    try {
+      const newAmount = `$${(selectedClaim.requestedAmount || 0).toLocaleString()}`;
+      const newCoverage = selectedClaim.requestedAmount || selectedClaim.coverage;
+      
+      await fetch(`/api/claims/${selectedClaimId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          coverage: newCoverage, 
+          amount: newAmount, 
+          negotiationPending: false, 
+          status: 'Approved' 
+        })
+      });
+
+      setClaimsQueue(prev => prev.map(c => 
+        c.id === selectedClaimId ? { ...c, coverage: newCoverage, amount: newAmount, negotiationPending: false, status: 'Approved' } : c
+      ));
+      
+      addNotification({
+        id: `neg-ok-${Date.now()}`,
+        title: "Negotiation Approved",
+        message: `Final repair sum for ${selectedClaimId} set to $${selectedClaim.requestedAmount?.toLocaleString()}.`,
+        type: 'success',
+        timestamp: new Date(),
+        isRead: false
+      });
+    } catch (error) {
+      console.error("Failed to approve negotiation:", error);
+    }
   };
 
   const requestCounter = async () => {
     if (!selectedClaimId || !selectedClaim) return;
-    setClaimsQueue(prev => prev.map(c => 
-      c.id === selectedClaimId ? { ...c, negotiationPending: false, bottleneckReason: 'Counter-offer issued by Support', status: 'Reviewing' } : c
-    ));
-    addNotification({
-      id: `neg-counter-${Date.now()}`,
-      title: "Counter-offer Issued",
-      message: `A counter-offer handshake has been initiated for claim ${selectedClaimId}.`,
-      type: 'info',
-      timestamp: new Date(),
-      isRead: false
-    });
+    
+    try {
+      await fetch(`/api/claims/${selectedClaimId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          negotiationPending: false, 
+          bottleneckReason: 'Counter-offer issued by Support', 
+          status: 'Reviewing' 
+        })
+      });
+
+      setClaimsQueue(prev => prev.map(c => 
+        c.id === selectedClaimId ? { ...c, negotiationPending: false, bottleneckReason: 'Counter-offer issued by Support', status: 'Reviewing' } : c
+      ));
+      
+      addNotification({
+        id: `neg-counter-${Date.now()}`,
+        title: "Counter-offer Issued",
+        message: `A counter-offer has been initiated for claim ${selectedClaimId}.`,
+        type: 'info',
+        timestamp: new Date(),
+        isRead: false
+      });
+    } catch (error) {
+      console.error("Failed to issue counter-offer:", error);
+    }
+  };
+
+  const handleProcessPayout = async () => {
+    if (!selectedClaimId || !selectedClaim) return;
+    
+    try {
+      await fetch(`/api/claims/${selectedClaimId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          status: 'Settled',
+          insurancePaid: true
+        })
+      });
+
+      setClaimsQueue(prev => prev.map(c => 
+        c.id === selectedClaimId ? { ...c, status: 'Settled', insurancePaid: true } : c
+      ));
+      
+      addNotification({
+        id: `payout-${Date.now()}`,
+        title: "Payout Processed",
+        message: `Claim ${selectedClaimId} has been settled.`,
+        type: 'success',
+        timestamp: new Date(),
+        isRead: false
+      });
+    } catch (error) {
+      console.error("Failed to process payout:", error);
+    }
+    setShowPaymentBridge(false);
+  };
+
+  const handleAddNote = async () => {
+    if (!selectedClaimId || !newNoteText.trim()) return;
+    setIsSavingNote(true);
+    try {
+      const response = await fetch(`/api/claims/${selectedClaimId}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: newNoteText,
+          visibleToRepairer: isNoteVisibleToRepairer
+        })
+      });
+      if (response.ok) {
+        const newNote = await response.json();
+        setClaimsQueue(prev => prev.map(c => 
+          c.id === selectedClaimId ? { ...c, notes: [...(c.notes || []), newNote] } : c
+        ));
+        setNewNoteText('');
+        setIsNoteVisibleToRepairer(false);
+        addNotification({
+          id: `note-${Date.now()}`,
+          title: "Note Added",
+          message: "The private note has been saved to the claim dossier.",
+          type: 'success',
+          timestamp: new Date(),
+          isRead: false
+        });
+      }
+    } catch (error) {
+      console.error("Failed to add note:", error);
+    } finally {
+      setIsSavingNote(false);
+    }
   };
 
   if (activeTab === 'inbox') {
@@ -354,7 +499,7 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
               <div className="space-y-1">
                 <h3 className="text-lg md:text-xl font-bold text-black uppercase tracking-tight italic">Live Claims Queue</h3>
-                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest italic">Prioritized workflow nodes</p>
+                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest italic">Prioritized workflow steps</p>
               </div>
               <div className="flex bg-slate-50 border border-slate-200 rounded-2xl px-6 py-3 items-center gap-4 shadow-inner flex-1 w-full lg:max-w-md">
                 <Search size={18} className="text-zinc-300" />
@@ -546,13 +691,28 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
                             </div>
                          </div>
                       </div>
-                      <Button 
-                        disabled={selectedClaim.insurancePaid || selectedClaim.negotiationPending}
-                        onClick={() => setShowPayPalBridge(true)}
-                        className="w-full h-18 bg-[#0070ba] text-[10px] font-black italic rounded-2xl shadow-xl hover:bg-[#005ea6] transition-all"
-                      >
-                        {selectedClaim.insurancePaid ? 'AUDIT ARCHIVED' : `DISBURSE $${selectedClaim.coverage.toLocaleString()}`}
-                      </Button>
+                      <div className="flex flex-col gap-3">
+                        <Button 
+                          disabled={selectedClaim.insurancePaid || selectedClaim.negotiationPending || selectedClaim.status === 'Settled'}
+                          onClick={() => setShowPaymentBridge(true)}
+                          className={`w-full h-18 text-[10px] font-black italic rounded-2xl shadow-xl transition-all ${selectedClaim.status === 'Approved' ? 'bg-green-600 hover:bg-green-700' : 'bg-[#635bff] hover:bg-[#5851e0]'} text-white`}
+                        >
+                          {selectedClaim.status === 'Settled' ? 'AUDIT ARCHIVED' : selectedClaim.status === 'Approved' ? 'PROCESS PAYOUT' : `DISBURSE $${selectedClaim.coverage.toLocaleString()}`}
+                        </Button>
+                        
+                        {!selectedClaim.insurancePaid && selectedClaim.status !== 'Settled' && (
+                          <Button 
+                            variant="outline"
+                            onClick={() => {
+                              // For demo, we'll just trigger the same bridge but with a different title/amount
+                              setShowPaymentBridge(true);
+                            }}
+                            className="w-full h-12 text-[9px] font-black italic rounded-xl border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-900"
+                          >
+                            TOP-UP / PAY DEDUCTIBLE
+                          </Button>
+                        )}
+                      </div>
                       {selectedClaim.negotiationPending && (
                         <p className="text-[8px] font-bold text-yellow-500 uppercase text-center tracking-widest animate-pulse italic">Locked: Awaiting Finance Handshake</p>
                       )}
@@ -574,6 +734,60 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
                        </a>
                     </div>
                   </Card>
+
+                  <Card className="p-8 bg-white border-zinc-100 rounded-[32px] space-y-6 shadow-xl">
+                    <div className="flex justify-between items-center">
+                      <h3 className="text-[9px] font-black uppercase text-zinc-400 flex items-center gap-3 tracking-widest italic"><ClipboardList size={18} className="text-[#E31B23]" /> Internal Dossier Notes</h3>
+                    </div>
+                    
+                    <div className="space-y-4 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
+                      {selectedClaim.notes && selectedClaim.notes.length > 0 ? (
+                        selectedClaim.notes.map((note) => (
+                          <div key={note.id} className="p-4 bg-zinc-50 rounded-xl border border-zinc-100 space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className="text-[8px] font-bold text-zinc-400 uppercase">{note.timestamp}</span>
+                              {note.visibleToRepairer && (
+                                <Badge status="info" className="text-[7px] px-1.5 py-0.5">SHARED</Badge>
+                              )}
+                            </div>
+                            <p className="text-[10px] font-medium text-zinc-700 italic leading-relaxed">{note.text}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-[9px] font-bold text-zinc-300 uppercase text-center py-4 italic">No internal notes recorded</p>
+                      )}
+                    </div>
+
+                    <div className="pt-6 border-t border-zinc-50 space-y-4">
+                      <textarea 
+                        value={newNoteText}
+                        onChange={(e) => setNewNoteText(e.target.value)}
+                        placeholder="Input internal advisory..."
+                        className="w-full h-24 bg-zinc-50 border border-zinc-100 rounded-xl p-4 text-[10px] font-medium italic outline-none focus:border-black transition-all resize-none"
+                      />
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-2 cursor-pointer group">
+                          <input 
+                            type="checkbox" 
+                            checked={isNoteVisibleToRepairer}
+                            onChange={(e) => setIsNoteVisibleToRepairer(e.target.checked)}
+                            className="hidden"
+                          />
+                          <div className={`w-8 h-4 rounded-full transition-all relative ${isNoteVisibleToRepairer ? 'bg-green-500' : 'bg-zinc-200'}`}>
+                            <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${isNoteVisibleToRepairer ? 'left-4' : 'left-0.5'}`} />
+                          </div>
+                          <span className="text-[8px] font-black uppercase tracking-widest text-zinc-400 group-hover:text-black transition-colors italic">Share with Partner</span>
+                        </label>
+                        <Button 
+                          onClick={handleAddNote}
+                          disabled={isSavingNote || !newNoteText.trim()}
+                          className="h-10 px-6 bg-black text-white text-[9px] font-black rounded-lg shadow-lg"
+                        >
+                          {isSavingNote ? <Loader2 size={14} className="animate-spin" /> : 'SAVE NOTE'}
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
                </div>
             </div>
           )}
@@ -581,6 +795,18 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
       )}
       
       <LiveChat session={session} context={selectedClaim ? `Support Handshake for Claim ${selectedClaim.id}` : "Fleet support console"} />
+      
+      {showPaymentBridge && selectedClaim && (
+        <PaymentBridge 
+          amount={`$${selectedClaim.coverage.toLocaleString()}`} 
+          to={selectedClaim.repairer} 
+          claimId={selectedClaim.id}
+          customerName={selectedClaim.customer}
+          onSuccess={handleProcessPayout} 
+          onCancel={() => setShowPaymentBridge(false)} 
+          title="Claim Settlement"
+        />
+      )}
     </div>
   );
 };

@@ -2,10 +2,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { UserRole, AuthSession } from '../types';
 import { Button, Card, Logo } from './Shared';
-import { signUpUser, signInUser } from '../lib/auth';
-import {
-  User as UserIcon, Mail, Lock,
-  ChevronDown, Eye, EyeOff,
+import { 
+  User as UserIcon, Mail, Lock, 
+  ChevronDown, Eye, EyeOff, 
   Loader2, Fingerprint, UserCircle, ClipboardList, Wrench, BarChart3, Users,
   Check, RefreshCw, ArrowLeft, ExternalLink, ShieldAlert, MailCheck, X as XIcon, Zap, Smartphone
 } from 'lucide-react';
@@ -25,6 +24,9 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const [countdown, setCountdown] = useState(5);
   const [showPassword, setShowPassword] = useState(false);
   const [show2FA, setShow2FA] = useState(false);
+  const [showVerificationSent, setShowVerificationSent] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   
   const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
@@ -50,8 +52,21 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     special: false
   });
 
-  // Load remembered user on mount
+  // Load remembered user on mount and initialize demo accounts
   useEffect(() => {
+    // Initialize demo accounts if none exist
+    const existingUsers = JSON.parse(localStorage.getItem('aims_registered_users') || '[]');
+    if (existingUsers.length === 0) {
+      const demoUsers = [
+        { email: 'customer@aims.com', password: 'password123', role: UserRole.CUSTOMER, fullName: 'DEMO CUSTOMER', verified: true },
+        { email: 'assessor@aims.com', password: 'password123', role: UserRole.ASSESSOR, fullName: 'DEMO ASSESSOR', verified: true },
+        { email: 'support@aims.com', password: 'password123', role: UserRole.SUPPORT_STAFF, fullName: 'DEMO SUPPORT', verified: true },
+        { email: 'repair@aims.com', password: 'password123', role: UserRole.REPAIR_PARTNER, fullName: 'DEMO REPAIR', verified: true },
+        { email: 'manager@aims.com', password: 'password123', role: UserRole.MANAGER, fullName: 'DEMO MANAGER', verified: true },
+      ];
+      localStorage.setItem('aims_registered_users', JSON.stringify(demoUsers));
+    }
+
     const saved = localStorage.getItem('aims_remembered_user');
     if (saved) {
       try {
@@ -124,67 +139,80 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     setPasswordStrength({ score, label: val.length < 8 ? 'Too Short' : labels[score] });
   };
 
-  const [authError, setAuthError] = useState<string | null>(null);
-
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    setAuthError(null);
-
     if (view !== 'phoneLogin' && captchaInput.toUpperCase() !== captchaChallenge) {
-      setAuthError("Invalid CAPTCHA. Please try again.");
+      alert("Invalid CAPTCHA. Please try again.");
       generateCaptcha();
       return;
     }
-
     setLoading(true);
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    setLoading(false);
 
-    try {
-      if (view === 'phoneLogin') {
-        if (!otpSent) {
-          setOtpSent(true);
-          setLoading(false);
-          return;
-        }
+    const users = JSON.parse(localStorage.getItem('aims_registered_users') || '[]');
+
+    if (view === 'signup') {
+      if (users.find((u: any) => u.email === email)) {
+        alert("This email is already registered. Please login.");
+        setView('login');
+        return;
+      }
+      
+      const newUser = { 
+        email, 
+        password, 
+        role, 
+        fullName, 
+        verified: role !== UserRole.CUSTOMER // Auto-verify staff for demo, customers need email
+      };
+      users.push(newUser);
+      localStorage.setItem('aims_registered_users', JSON.stringify(users));
+
+      if (role === UserRole.CUSTOMER) {
+        setShowVerificationSent(true);
+      } else {
         completeLogin();
-        setLoading(false);
+      }
+      return;
+    }
+
+    if (view === 'login') {
+      const existingUser = users.find((u: any) => u.email === email && u.role === role);
+      
+      if (!existingUser) {
+        alert("Account not found for this role. Please register first.");
+        setView('signup');
         return;
       }
 
-      if (view === 'signup') {
-        const result = await signUpUser(email, password, fullName, phoneNumber || '', role);
-        if (result.error) {
-          setAuthError(result.error);
-          setLoading(false);
-          return;
-        }
-        if (result.session) {
-          if (rememberMe) {
-            localStorage.setItem('aims_remembered_user', JSON.stringify({ email, role }));
-          }
-          onLogin(result.session, rememberMe);
-        }
-      } else {
-        const result = await signInUser(email, password);
-        if (result.error) {
-          setAuthError(result.error);
-          setLoading(false);
-          return;
-        }
-        if (result.session) {
-          if (role === UserRole.CUSTOMER) {
-            setShow2FA(true);
-          } else {
-            if (rememberMe) {
-              localStorage.setItem('aims_remembered_user', JSON.stringify({ email, role }));
-            }
-            onLogin(result.session, rememberMe);
-          }
-        }
+      if (existingUser.password !== password) {
+        alert("Incorrect password. Please try again.");
+        return;
       }
-    } catch (error) {
-      setAuthError('An unexpected error occurred');
-    } finally {
-      setLoading(false);
+
+      if (role === UserRole.CUSTOMER && !existingUser.verified) {
+        setShowVerificationSent(true);
+        return;
+      }
+
+      completeLogin();
+      return;
+    }
+
+    if (view === 'phoneLogin') {
+      const user = users.find((u: any) => u.email === email && u.role === role);
+      if (!user) {
+        alert("This email is not registered. Please create an account first.");
+        setView('signup');
+        return;
+      }
+      if (!otpSent) {
+        setOtpSent(true);
+        return;
+      }
+      completeLogin();
+      return;
     }
   };
 
@@ -222,17 +250,19 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const completeLogin = () => {
     // Save details if remember me is checked
     if (rememberMe) {
-      localStorage.setItem('aims_remembered_user', JSON.stringify({ email: view === 'phoneLogin' ? phoneNumber : email, role }));
+      localStorage.setItem('aims_remembered_user', JSON.stringify({ email: email, role }));
     } else {
       localStorage.removeItem('aims_remembered_user');
     }
 
+    const users = JSON.parse(localStorage.getItem('aims_registered_users') || '[]');
     const user = {
       id: crypto.randomUUID(),
-      email: view === 'phoneLogin' ? `${phoneNumber}@mobile.aims` : email,
+      email: email,
       phone: phoneNumber || '0786413281',
-      full_name: fullName || (view === 'phoneLogin' ? `PHONE-USER-${phoneNumber.slice(-4)}` : email.split('@')[0].toUpperCase()),
+      full_name: fullName || email.split('@')[0].toUpperCase(),
       role: role,
+      verified: role !== UserRole.CUSTOMER || (users.find((u: any) => u.email === email)?.verified || false),
       created_at: new Date().toISOString()
     };
     onLogin({ user }, rememberMe);
@@ -247,7 +277,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
             <MailCheck size={32} className="animate-bounce" />
           </div>
           <div className="space-y-3">
-            <h2 className="text-2xl font-[900] text-black uppercase tracking-tighter italic">Link Dispatched</h2>
+            <h2 className="text-2xl font-[900] text-black uppercase tracking-tighter italic">Email Sent</h2>
             <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest leading-relaxed">
               We have sent a reset link to <span className="text-black italic">{recoveryEmail}</span>.
             </p>
@@ -263,16 +293,80 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     );
   }
 
+  const verifyAndLogin = () => {
+    const users = JSON.parse(localStorage.getItem('aims_registered_users') || '[]');
+    const userIdx = users.findIndex((u: any) => u.email === email);
+    if (userIdx !== -1) {
+      users[userIdx].verified = true;
+      localStorage.setItem('aims_registered_users', JSON.stringify(users));
+    }
+    setShowVerificationSent(false);
+    completeLogin();
+  };
+
+  const handleResendVerification = async () => {
+    setResendLoading(true);
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    setResendLoading(false);
+    setResendSuccess(true);
+    setTimeout(() => setResendSuccess(false), 3000);
+  };
+
+  if (showVerificationSent) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 bg-black">
+        <Card className="w-full max-w-md p-10 text-center space-y-8 border-none shadow-[0_0_100px_rgba(227,27,35,0.1)] relative z-10">
+          <div className="w-16 h-16 bg-black text-[#E31B23] border-b-4 border-[#E31B23] mx-auto flex items-center justify-center shadow-2xl">
+            <MailCheck size={32} className="animate-bounce" />
+          </div>
+          <div className="space-y-3">
+            <h2 className="text-xl font-black uppercase tracking-tighter italic">Verify Your Email</h2>
+            <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">We've sent a verification link to {email}</p>
+          </div>
+          
+          {resendSuccess && (
+            <div className="p-4 bg-green-50 text-green-600 rounded-xl text-[10px] font-bold uppercase tracking-widest animate-in fade-in slide-in-from-top-2">
+              Verification email resent successfully!
+            </div>
+          )}
+
+          <div className="p-6 bg-zinc-50 rounded-2xl border border-zinc-100 text-[10px] font-bold text-zinc-500 italic">
+            In a real system, you would click the link in your inbox. For this demo, click below to simulate verification.
+          </div>
+          
+          <div className="space-y-4">
+            <Button onClick={verifyAndLogin} className="w-full h-16 text-[11px]" disabled={loading}>
+              {loading ? <Loader2 className="animate-spin" /> : 'SIMULATE EMAIL VERIFICATION'}
+            </Button>
+            
+            <button 
+              onClick={handleResendVerification} 
+              disabled={resendLoading}
+              className="w-full py-4 text-[9px] font-black text-zinc-400 uppercase hover:text-[#E31B23] tracking-widest flex items-center justify-center gap-2 transition-colors"
+            >
+              {resendLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              Resend Verification Email
+            </button>
+          </div>
+
+          <button onClick={() => setShowVerificationSent(false)} className="text-[9px] font-black text-zinc-400 uppercase hover:text-black tracking-widest">
+            Back to Login
+          </button>
+        </Card>
+      </div>
+    );
+  }
+
   if (show2FA) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6 bg-black">
         <Card className="w-full max-w-md p-10 text-center space-y-8 border-none shadow-[0_0_100px_rgba(227,27,35,0.1)] relative z-10">
           <div className="w-16 h-16 bg-black text-[#E31B23] border-b-4 border-[#E31B23] mx-auto flex items-center justify-center shadow-2xl">
-            <Fingerprint size={32} />
+            <Mail size={32} />
           </div>
           <div className="space-y-3">
             <h2 className="text-xl font-black uppercase tracking-tighter italic">Verify Identity</h2>
-            <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Multi-Factor Authentication</p>
+            <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Check your email for the code</p>
           </div>
           <div className="flex justify-center gap-2">
             {[1,2,3,4,5,6].map(i => (
@@ -340,18 +434,18 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
           ) : view === 'phoneLogin' ? (
             <form onSubmit={handleAuth} className="space-y-8 animate-in fade-in duration-500">
                <div className="text-center">
-                <h2 className="text-2xl font-black uppercase tracking-tighter text-black italic">Phone Link</h2>
-                <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mt-2">Mobile RSA Handshake</p>
+                <h2 className="text-2xl font-black uppercase tracking-tighter text-black italic">Email Code</h2>
+                <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mt-2">Secure Email Login</p>
               </div>
               <div className="space-y-5">
                 {!otpSent ? (
                   <div className="relative group">
-                    <Smartphone size={20} className="absolute left-6 top-5 text-zinc-300 group-focus-within:text-[#E31B23]" />
-                    <input required type="tel" value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 focus:border-[#E31B23] focus:bg-white py-5 pl-16 pr-10 text-[12px] font-bold outline-none" placeholder="PHONE NUMBER (E.G. 078...)" />
+                    <Mail size={20} className="absolute left-6 top-5 text-zinc-300 group-focus-within:text-[#E31B23]" />
+                    <input required type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 focus:border-[#E31B23] focus:bg-white py-5 pl-16 pr-10 text-[12px] font-bold outline-none" placeholder="EMAIL ADDRESS" />
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    <p className="text-[10px] font-bold text-zinc-500 text-center uppercase">Enter the 6-digit code sent to {phoneNumber}</p>
+                    <p className="text-[10px] font-bold text-zinc-500 text-center uppercase">Enter the 6-digit code sent to {email}</p>
                     <div className="flex justify-center gap-2">
                       {[1,2,3,4,5,6].map(i => (
                         <input key={i} maxLength={1} value={otp[i-1] || ''} onChange={e => setOtp(prev => {
@@ -366,25 +460,20 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
               </div>
               <div className="space-y-3">
                 <Button type="submit" disabled={loading} className="w-full h-16 group text-[11px]">
-                  {loading ? <Loader2 className="animate-spin" /> : (otpSent ? 'VERIFY & CONNECT' : 'DISPATCH OTP')}
+                  {loading ? <Loader2 className="animate-spin" /> : (otpSent ? 'VERIFY & LOGIN' : 'SEND CODE')}
                 </Button>
                 <button type="button" onClick={() => { setView('login'); setOtpSent(false); }} className="w-full py-4 text-[9px] font-black text-zinc-400 uppercase flex items-center justify-center gap-2 hover:text-black">
-                   <ArrowLeft size={14} /> Back to Sign In
+                   <ArrowLeft size={14} /> Back to Login
                 </button>
               </div>
             </form>
           ) : (
             <form onSubmit={handleAuth} className="space-y-6 animate-in fade-in duration-500">
               <div className="text-center">
-                <h2 className="text-2xl font-black uppercase tracking-tighter text-black italic">{view === 'login' ? 'Sign In' : 'Join Network'}</h2>
-                <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mt-2">Authorized Access Desk</p>
+                <h2 className="text-2xl font-black uppercase tracking-tighter text-black italic">{view === 'login' ? 'Login' : 'Create Account'}</h2>
+                <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mt-2">Login Portal</p>
               </div>
               <div className="space-y-4">
-                {authError && (
-                  <div className="bg-red-50 border-2 border-[#E31B23] rounded-xl p-4">
-                    <p className="text-[10px] font-black text-[#E31B23] uppercase tracking-wider">{authError}</p>
-                  </div>
-                )}
                 <div className="relative" ref={dropdownRef}>
                   <label className="text-[8px] font-black uppercase text-zinc-400 tracking-widest mb-1 block">Role Identity</label>
                   <button type="button" onClick={() => setIsRoleDropdownOpen(!isRoleDropdownOpen)} className={`w-full bg-zinc-50 border-2 py-4 pl-12 pr-10 text-[11px] font-black uppercase tracking-widest text-black outline-none transition-all flex items-center gap-3 ${isRoleDropdownOpen ? 'border-[#E31B23] bg-white' : 'border-zinc-100'}`}>
@@ -404,10 +493,16 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                 </div>
 
                 {view === 'signup' && (
-                  <div className="relative group animate-in slide-in-from-top-2">
-                    <UserIcon className="absolute left-6 top-5 text-zinc-300 group-focus-within:text-[#E31B23]" size={20} />
-                    <input required type="text" value={fullName} onChange={e => setFullName(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 focus:border-[#E31B23] py-5 pl-16 text-[12px] font-bold outline-none" placeholder="FULL NAME" />
-                  </div>
+                  <>
+                    <div className="relative group animate-in slide-in-from-top-2">
+                      <UserIcon className="absolute left-6 top-5 text-zinc-300 group-focus-within:text-[#E31B23]" size={20} />
+                      <input required type="text" value={fullName} onChange={e => setFullName(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 focus:border-[#E31B23] py-5 pl-16 text-[12px] font-bold outline-none" placeholder="FULL NAME" />
+                    </div>
+                    <div className="relative group animate-in slide-in-from-top-2">
+                      <Smartphone className="absolute left-6 top-5 text-zinc-300 group-focus-within:text-[#E31B23]" size={20} />
+                      <input required type="tel" value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 focus:border-[#E31B23] py-5 pl-16 text-[12px] font-bold outline-none" placeholder="PHONE NUMBER" />
+                    </div>
+                  </>
                 )}
 
                 <div className="relative group">
@@ -478,9 +573,9 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                         {rememberMe && <Check size={12} className="text-white" />}
                       </div>
                       <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} className="hidden" />
-                      <span className="text-[9px] font-black text-zinc-400 uppercase group-hover:text-black tracking-widest italic">Keep me in session</span>
+                      <span className="text-[9px] font-black text-zinc-400 uppercase group-hover:text-black tracking-widest italic">Keep me logged in</span>
                     </label>
-                    <button type="button" onClick={() => setView('forgotPassword')} className="text-[9px] font-black text-zinc-400 uppercase hover:text-[#E31B23] tracking-widest italic">Access Help</button>
+                    <button type="button" onClick={() => setView('forgotPassword')} className="text-[9px] font-black text-zinc-400 uppercase hover:text-[#E31B23] tracking-widest italic">Forgot Password?</button>
                   </div>
                 )}
                 <Button 
@@ -499,11 +594,11 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
 
               <div className="pt-6 text-center border-t border-zinc-100">
                 <button type="button" onClick={() => setView(view === 'login' ? 'signup' : 'login')} className="text-[9px] font-black text-zinc-400 uppercase tracking-widest hover:text-black italic underline decoration-[#E31B23]/30 decoration-2 underline-offset-4">
-                  {view === 'login' ? "Request Network Account" : "Access Returning Desk"}
+                  {view === 'login' ? "Create an Account" : "Back to Login"}
                 </button>
                 {view === 'login' && (
                   <button type="button" onClick={() => setView('phoneLogin')} className="mt-4 w-full h-14 border-2 border-zinc-100 rounded-xl flex items-center justify-center gap-3 text-[9px] font-black uppercase tracking-widest text-zinc-400 hover:border-black hover:text-black transition-all">
-                    <Smartphone size={16} /> Connect using Phone
+                    <Mail size={16} /> Login with Email Code
                   </button>
                 )}
               </div>

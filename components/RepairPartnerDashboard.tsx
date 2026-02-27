@@ -38,7 +38,7 @@ interface Job {
   progress: number;
   dateReceived: string;
   taskDescription: string;
-  checklist: { label: string; completed: boolean }[];
+  checklist: { label: string; completed: boolean; dueDate?: string }[];
   progressLogs: ProgressLog[];
   fixedCarPhotos: string[];
   isAccepted: boolean;
@@ -71,49 +71,44 @@ const RepairPartnerDashboard: React.FC<RepairPartnerDashboardProps> = ({ onLogou
     avgPayout: '4.2 Days'
   });
 
-  const [jobs, setJobs] = useState<Job[]>([
-    { 
-      id: 'CL-9921', 
-      customer: 'JOHN DOE', 
-      vehicle: '2022 BMW M3', 
-      registration: 'ABC-123', 
-      status: 'REPAIRER ASSIGNED', 
-      priority: 'HIGH', 
-      budget: 4150, 
-      progress: 0, 
-      dateReceived: '2024-05-15', 
-      taskDescription: 'Front impact collision. Chassis alignment required.', 
-      isAccepted: false, 
-      assessorName: 'Marcus Flint', 
-      fixedCarPhotos: [],
-      checklist: [{ label: 'Structural Inspection', completed: false }, { label: 'AIMS Ledger Sync', completed: false }], 
-      progressLogs: [], 
-      chatHistory: [],
-      financeHistory: []
-    },
-    { 
-      id: 'CL-9940', 
-      customer: 'ALICE WONG', 
-      vehicle: '2021 Audi RS6', 
-      registration: 'WONG-88', 
-      status: 'REPAIR IN_PROGRESS', 
-      priority: 'MEDIUM', 
-      budget: 8200, 
-      progress: 85, 
-      dateReceived: '2024-05-18', 
-      taskDescription: 'Rear bumper replacement. Sensor calibration.', 
-      isAccepted: true, 
-      assessorName: 'Sarah Jenkins', 
-      fixedCarPhotos: [],
-      negotiationStatus: 'IDLE',
-      checklist: [{ label: 'Damage Assessment', completed: true }, { label: 'Parts Procurement', completed: true }, { label: 'Sensor Calibration', completed: true }], 
-      progressLogs: [], 
-      chatHistory: [
-        { id: '1', sender: 'Assessor', text: 'Please ensure you use OEM sensors for the Audi calibration.', time: '09:00 AM' }
-      ],
-      financeHistory: []
-    }
-  ]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+
+  useEffect(() => {
+    const fetchJobs = async () => {
+      try {
+        const response = await fetch('/api/claims');
+        if (response.ok) {
+          const data = await response.json();
+          const mappedJobs = data.map((c: any) => ({
+            id: c.id,
+            customer: c.customer || c.owner,
+            vehicle: c.vehicle || c.car,
+            registration: c.regNo,
+            status: c.status,
+            priority: c.priority,
+            budget: c.coverage,
+            progress: c.progress || 0,
+            dateReceived: c.submittedAt || new Date().toISOString(),
+            taskDescription: c.userStatement,
+            isAccepted: c.status !== 'REPAIRER ASSIGNED',
+            assessorName: c.assignedAssessor || 'Marcus Flint',
+            fixedCarPhotos: [],
+            checklist: [
+              { label: 'Structural Inspection', completed: false, dueDate: new Date(Date.now() + 86400000).toISOString().split('T')[0] }, 
+              { label: 'System Sync', completed: false, dueDate: new Date(Date.now() + 172800000).toISOString().split('T')[0] }
+            ],
+            progressLogs: [],
+            chatHistory: [],
+            financeHistory: []
+          }));
+          setJobs(mappedJobs);
+        }
+      } catch (error) {
+        console.error("Failed to fetch jobs:", error);
+      }
+    };
+    fetchJobs();
+  }, []);
 
   const activeJob = jobs.find(j => j.id === selectedJobId);
 
@@ -136,6 +131,16 @@ const RepairPartnerDashboard: React.FC<RepairPartnerDashboardProps> = ({ onLogou
       const completedCount = newChecklist.filter(i => i.completed).length;
       const progress = Math.round((completedCount / newChecklist.length) * 100);
       return { ...j, checklist: newChecklist, progress };
+    }));
+  };
+
+  const updateTaskDueDate = (jobId: string, label: string, dueDate: string) => {
+    setJobs(prev => prev.map(j => {
+      if (j.id !== jobId) return j;
+      const newChecklist = j.checklist.map(item => 
+        item.label === label ? { ...item, dueDate } : item
+      );
+      return { ...j, checklist: newChecklist };
     }));
   };
 
@@ -233,7 +238,7 @@ const RepairPartnerDashboard: React.FC<RepairPartnerDashboardProps> = ({ onLogou
       const aiMsg: ChatMessage = { 
         id: (Date.now() + 1).toString(), 
         sender: chatMode === 'assessor' ? 'Assessor' : 'Support', 
-        text: response.text || "Message acknowledged. Syncing with AIMS ledger.", 
+        text: response.text || "Message acknowledged. Syncing with system.", 
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
       };
 
@@ -337,6 +342,49 @@ const RepairPartnerDashboard: React.FC<RepairPartnerDashboardProps> = ({ onLogou
                </Card>
 
                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
+                  {/* Task Checklist Card */}
+                  <Card className="p-8 bg-white border-none shadow-xl rounded-[24px] space-y-6">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2.5 bg-zinc-50 rounded-xl shadow-inner text-black"><ClipboardCheck size={20} /></div>
+                        <h3 className="text-xs font-black uppercase tracking-widest italic text-black">Task Checklist</h3>
+                      </div>
+                      <Badge className="bg-zinc-50 border-none text-[8px] text-zinc-400 font-bold">
+                        {activeJob.checklist.filter(i => i.completed).length}/{activeJob.checklist.length} DONE
+                      </Badge>
+                    </div>
+                    <div className="space-y-3">
+                      {activeJob.checklist.map((task, idx) => (
+                        <div key={idx} className="flex items-center justify-between p-4 bg-zinc-50 border border-zinc-100 rounded-xl hover:bg-white hover:shadow-md transition-all group">
+                          <div className="flex items-center gap-4 flex-1">
+                            <button 
+                              onClick={() => toggleChecklist(activeJob.id, task.label)}
+                              className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${task.completed ? 'bg-green-500 border-green-500 text-white' : 'border-zinc-200 text-transparent hover:border-black'}`}
+                            >
+                              <Check size={14} />
+                            </button>
+                            <div className="flex-1">
+                              <p className={`text-[11px] font-bold uppercase italic leading-none ${task.completed ? 'text-zinc-300 line-through' : 'text-black'}`}>
+                                {task.label}
+                              </p>
+                              <div className="flex items-center gap-2 mt-1.5">
+                                <Clock size={10} className="text-zinc-400" />
+                                <input 
+                                  type="date"
+                                  value={task.dueDate || ''}
+                                  onChange={(e) => updateTaskDueDate(activeJob.id, task.label, e.target.value)}
+                                  className="bg-transparent text-[8px] font-black text-zinc-400 uppercase tracking-widest outline-none border-none p-0 cursor-pointer hover:text-black transition-colors"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                          {task.dueDate && new Date(task.dueDate) < new Date() && !task.completed && (
+                            <Badge className="bg-red-50 text-red-600 border-none text-[7px] font-black uppercase px-2 py-0.5 animate-pulse">OVERDUE</Badge>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
                  {/* Financial Negotiation Card */}
                  <Card className="p-8 bg-[#FFD700]/5 border-2 border-[#FFD700]/10 shadow-xl rounded-[24px] space-y-6">
                     <div className="flex items-center gap-3">

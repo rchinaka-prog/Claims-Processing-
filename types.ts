@@ -31,6 +31,7 @@ export interface User {
   phone: string;
   full_name: string;
   role: UserRole;
+  verified: boolean;
   profile_pic_url?: string;
   last_login?: string;
   created_at: string;
@@ -99,4 +100,10 @@ export interface TimelineEvent {
   date: string;
   status: string;
   description: string;
+}
+
+declare global {
+  interface Window {
+    // Stripe is loaded via script or SDK
+  }
 }

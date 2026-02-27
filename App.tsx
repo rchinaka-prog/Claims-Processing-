@@ -1,8 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { UserRole, AuthSession } from './types';
-import { supabase } from './lib/supabase';
-import { signOutUser } from './lib/auth';
 import CustomerDashboard from './components/CustomerDashboard';
 import AssessorDashboard from './components/AssessorDashboard';
 import RepairPartnerDashboard from './components/RepairPartnerDashboard';
@@ -17,23 +15,127 @@ import {
   LogOut, Bell, User as UserIcon, Menu,
   PlusCircle, Inbox, FileText, History, 
   Wrench, List, Activity, BarChart3, ShieldCheck, UserCog, ClipboardList, TrendingUp, Search, Shield, CreditCard, DollarSign,
-  Truck, X, LayoutDashboard, SmartphoneNfc, Camera, MessageCircle, Send, Zap, Loader2
+  Truck, X, LayoutDashboard, SmartphoneNfc, Smartphone, Camera, MessageCircle, Send, Zap, Loader2, ShieldAlert
 } from 'lucide-react';
+
+import { io, Socket } from 'socket.io-client';
 
 const AssessorMobileView: React.FC<{ 
   claimId: string, 
   onLogout: () => void 
 }> = ({ claimId, onLogout }) => {
   const [isSyncing, setIsSyncing] = useState(true);
+  const [claim, setClaim] = useState<any>(null);
+  const [evidence, setEvidence] = useState<{ id: string, name: string, type: string, data: string }[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [scratchpad, setScratchpad] = useState('');
+  const [isSavingScratchpad, setIsSavingScratchpad] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatSectionRef = useRef<HTMLDivElement>(null);
+  const socketRef = useRef<Socket | null>(null);
+
+  const scrollToChat = () => {
+    chatSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
 
   useEffect(() => {
+    // Initialize socket
+    socketRef.current = io();
+    socketRef.current.emit('join-claim', claimId);
+    socketRef.current.emit('mobile-connected', { claimId, timestamp: new Date() });
+
+    // Fetch existing claim and evidence from server
+    const fetchClaimData = async () => {
+      try {
+        const res = await fetch(`/api/claims/${claimId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setClaim(data);
+          setScratchpad(data.scratchpad || '');
+          if (data.evidence) setEvidence(data.evidence);
+        }
+      } catch (e) {
+        console.error("Failed to fetch claim data", e);
+      }
+    };
+    fetchClaimData();
+
     const timer = setTimeout(() => {
       setIsSyncing(false);
-      // Notify any listeners on the same domain (for demo purposes)
       localStorage.setItem('aims_sync_complete', 'true');
     }, 2000);
-    return () => clearTimeout(timer);
-  }, []);
+
+    return () => {
+      clearTimeout(timer);
+      socketRef.current?.disconnect();
+    };
+  }, [claimId]);
+
+  // Debounced scratchpad sync
+  useEffect(() => {
+    if (isSyncing) return;
+    
+    const timeoutId = setTimeout(async () => {
+      if (claim && scratchpad !== claim.scratchpad) {
+        setIsSavingScratchpad(true);
+        try {
+          await fetch(`/api/claims/${claimId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scratchpad })
+          });
+        } catch (e) {
+          console.error("Failed to sync scratchpad", e);
+        } finally {
+          setIsSavingScratchpad(false);
+        }
+      }
+    }, 1000);
+
+    return () => clearTimeout(timeoutId);
+  }, [scratchpad, claimId, isSyncing, claim]);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      setIsUploading(true);
+      const uploadPromises = (Array.from(files) as File[]).map(file => {
+        return new Promise<void>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+            const newEvidence = {
+              id: Math.random().toString(36).substr(2, 9),
+              name: file.name,
+              type: file.type,
+              data: reader.result as string
+            };
+            
+            try {
+              const res = await fetch(`/api/claims/${claimId}/evidence`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newEvidence)
+              });
+              
+              if (res.ok) {
+                const saved = await res.json();
+                setEvidence(prev => [...prev, saved]);
+              }
+            } catch (err) {
+              console.error("Failed to upload evidence", err);
+            }
+            resolve();
+          };
+          reader.readAsDataURL(file);
+        });
+      });
+
+      Promise.all(uploadPromises).finally(() => {
+        setIsUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      });
+    }
+  };
 
   if (isSyncing) {
     return (
@@ -43,8 +145,8 @@ const AssessorMobileView: React.FC<{
            <SmartphoneNfc size={80} className="text-[#E31B23] relative z-10 animate-bounce" />
          </div>
          <div className="space-y-4">
-           <h2 className="text-2xl font-black text-white uppercase italic tracking-tighter">Establishing Secure Link</h2>
-           <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-[0.3em] italic">Syncing AIMS Ledger Dossier...</p>
+           <h2 className="text-2xl font-black text-white uppercase italic tracking-tighter">Connecting...</h2>
+           <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-[0.3em] italic">Syncing Claim Information...</p>
          </div>
          <Loader2 size={32} className="animate-spin text-zinc-800" />
       </div>
@@ -63,10 +165,56 @@ const AssessorMobileView: React.FC<{
                 <h1 className="text-sm font-black uppercase italic tracking-tight">{claimId}</h1>
              </div>
           </div>
-          <button onClick={onLogout} className="p-2 text-zinc-500 hover:text-white"><LogOut size={20}/></button>
+          <button onClick={onLogout} className="p-2 text-zinc-500 hover:text-white transition-colors"><LogOut size={20}/></button>
        </header>
 
-       <main className="flex-1 p-6 space-y-6 overflow-y-auto">
+       <main className="flex-1 p-6 space-y-6 overflow-y-auto custom-scrollbar">
+          {claim && (
+            <Card className="p-6 bg-black text-white border-none shadow-2xl rounded-[32px] space-y-4 relative overflow-hidden group">
+               <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none"><Smartphone size={100} /></div>
+               <div className="relative z-10">
+                  <p className="text-[9px] font-black text-[#E31B23] uppercase tracking-widest italic mb-1">Active Inspection</p>
+                  <h2 className="text-2xl font-black uppercase italic tracking-tighter leading-none">{claim.car}</h2>
+                  <div className="flex flex-wrap gap-2 mt-4">
+                     <Badge className="bg-zinc-900 border-none text-zinc-400 font-bold text-[8px] italic uppercase tracking-widest">REG: {claim.regNo || 'N/A'}</Badge>
+                     <Badge className="bg-zinc-900 border-none text-zinc-400 font-bold text-[8px] italic uppercase tracking-widest">HOLDER: {claim.owner}</Badge>
+                  </div>
+               </div>
+            </Card>
+          )}
+
+          <div className="grid grid-cols-2 gap-4">
+             <input 
+               type="file" 
+               ref={fileInputRef} 
+               className="hidden" 
+               multiple 
+               accept="image/*,.pdf,.doc,.docx" 
+               onChange={handleFileUpload} 
+             />
+             <button 
+               onClick={() => fileInputRef.current?.click()}
+               disabled={isUploading}
+               className="aspect-square bg-black text-white rounded-[40px] flex flex-col items-center justify-center gap-4 shadow-2xl active:scale-95 transition-all group disabled:opacity-50"
+             >
+                {isUploading ? (
+                  <Loader2 size={32} className="animate-spin text-[#E31B23]" />
+                ) : (
+                  <Camera size={32} className="group-hover:rotate-12 transition-transform" />
+                )}
+                <span className="text-[10px] font-black uppercase tracking-widest text-center">
+                  {isUploading ? 'UPLOADING...' : 'CAPTURE &\nLINK DOCS'}
+                </span>
+             </button>
+             <button 
+               onClick={scrollToChat}
+               className="aspect-square bg-white border-2 border-slate-100 rounded-[40px] flex flex-col items-center justify-center gap-4 shadow-xl active:scale-95 transition-all group"
+             >
+                <MessageCircle size={32} className="text-[#E31B23]" />
+                <span className="text-[10px] font-black uppercase tracking-widest">CHATS</span>
+             </button>
+          </div>
+
           <Card className="p-6 bg-white border-none shadow-xl rounded-3xl space-y-4">
              <div className="flex items-center gap-3">
                 <div className="p-2.5 bg-green-50 text-green-600 rounded-xl"><ShieldCheck size={20}/></div>
@@ -77,36 +225,114 @@ const AssessorMobileView: React.FC<{
              </p>
           </Card>
 
-          <div className="grid grid-cols-2 gap-4">
-             <button className="aspect-square bg-black text-white rounded-[40px] flex flex-col items-center justify-center gap-4 shadow-2xl active:scale-95 transition-all group">
-                <Camera size={32} className="group-hover:rotate-12 transition-transform" />
-                <span className="text-[10px] font-black uppercase tracking-widest">CAPTURE</span>
-             </button>
-             <button className="aspect-square bg-white border-2 border-slate-100 rounded-[40px] flex flex-col items-center justify-center gap-4 shadow-xl active:scale-95 transition-all group">
-                <MessageCircle size={32} className="text-[#E31B23]" />
-                <span className="text-[10px] font-black uppercase tracking-widest">CHATS</span>
-             </button>
+          <Card className="p-8 bg-white border-none shadow-xl rounded-[32px] space-y-6">
+             <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                   <div className="p-3 bg-zinc-50 text-black rounded-xl shadow-sm"><ClipboardList size={20} /></div>
+                   <div>
+                      <h3 className="text-xs font-black uppercase tracking-widest italic text-black">Field Scratchpad</h3>
+                      <p className="text-[9px] font-bold text-zinc-400 uppercase italic mt-1">Local session notes</p>
+                   </div>
+                </div>
+                {isSavingScratchpad && (
+                  <div className="flex items-center gap-2">
+                    <Loader2 size={12} className="animate-spin text-zinc-400" />
+                    <span className="text-[8px] font-black text-zinc-400 uppercase italic">Syncing...</span>
+                  </div>
+                )}
+             </div>
+             <textarea 
+                value={scratchpad}
+                onChange={(e) => setScratchpad(e.target.value)}
+                className="w-full bg-slate-50 border-2 border-slate-100 rounded-[24px] p-6 text-[13px] font-bold italic min-h-[150px] outline-none focus:border-black transition-all placeholder:text-zinc-300 shadow-inner"
+                placeholder="Start typing field observations..."
+             />
+          </Card>
+
+          {evidence.length > 0 && (
+            <div className="space-y-4">
+               <div className="flex items-center justify-between px-2">
+                  <h3 className="text-[10px] font-black uppercase tracking-widest italic text-zinc-400">Linked Evidence ({evidence.length})</h3>
+                  <div className="flex gap-1">
+                     <div className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />
+                     <span className="text-[7px] font-black text-green-600 uppercase italic">Live Sync</span>
+                  </div>
+               </div>
+               
+               <div className="grid grid-cols-3 gap-3">
+                  {evidence.filter(e => e.type.startsWith('image/')).map((item) => (
+                    <div key={item.id} className="aspect-square rounded-2xl overflow-hidden border border-slate-200 shadow-md relative group">
+                       <img src={item.data} alt="" className="w-full h-full object-cover" />
+                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <Search size={16} className="text-white" />
+                       </div>
+                    </div>
+                  ))}
+               </div>
+
+               {evidence.filter(e => !e.type.startsWith('image/')).length > 0 && (
+                 <div className="space-y-2">
+                    {evidence.filter(e => !e.type.startsWith('image/')).map((item) => (
+                      <div key={item.id} className="flex items-center justify-between p-4 bg-white rounded-2xl border border-slate-100 shadow-sm">
+                         <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center shrink-0">
+                               <FileText size={20} />
+                            </div>
+                            <div className="min-w-0">
+                               <p className="text-[10px] font-black uppercase italic truncate">{item.name}</p>
+                               <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">{item.type.split('/')[1] || 'FILE'}</p>
+                            </div>
+                         </div>
+                         <Badge className="bg-green-50 text-green-600 border-none text-[7px] font-black">SYNCED</Badge>
+                      </div>
+                    ))}
+                 </div>
+               )}
+            </div>
+          )}
+
+          <div ref={chatSectionRef}>
+            <Card className="p-8 bg-zinc-950 text-white rounded-[40px] space-y-6 border-none shadow-2xl relative overflow-hidden">
+               <div className="absolute top-0 right-0 p-4 opacity-10"><Activity size={80}/></div>
+               <div className="relative z-10 space-y-6">
+                  <div className="flex items-center justify-between">
+                     <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Incoming Comms</p>
+                     <Badge className="bg-[#E31B23] text-white border-none text-[7px] font-black italic">NEW</Badge>
+                  </div>
+                  <div className="p-5 bg-white/5 rounded-3xl border border-white/10 italic text-[12px] font-medium leading-relaxed text-zinc-300">
+                     "Please confirm when you've reached the vehicle location."
+                  </div>
+                  <div className="flex gap-2">
+                     <input 
+                       className="flex-1 bg-zinc-900 border border-white/5 rounded-2xl px-5 py-4 text-[12px] font-bold italic outline-none focus:border-[#E31B23] transition-all placeholder:text-zinc-700" 
+                       placeholder="Type response..." 
+                     />
+                     <button className="w-14 h-14 bg-[#E31B23] text-white rounded-2xl shadow-lg flex items-center justify-center active:scale-95 transition-all">
+                        <Send size={20}/>
+                     </button>
+                  </div>
+               </div>
+            </Card>
           </div>
 
-          <Card className="p-6 bg-zinc-950 text-white rounded-[32px] space-y-6 border-none shadow-2xl relative overflow-hidden">
-             <div className="absolute top-0 right-0 p-4 opacity-10"><Activity size={80}/></div>
-             <div className="relative z-10 space-y-4">
-                <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Incoming Comms</p>
-                <div className="p-4 bg-white/5 rounded-2xl border border-white/10 italic text-[11px] font-medium leading-relaxed">
-                   "Please confirm when you've reached the vehicle location."
-                </div>
-                <div className="flex gap-2">
-                   <input className="flex-1 bg-zinc-900 border border-white/5 rounded-xl px-4 py-3 text-[11px] font-bold italic outline-none focus:border-[#E31B23]" placeholder="Response..." />
-                   <button className="p-3 bg-[#E31B23] text-white rounded-xl shadow-lg"><Send size={18}/></button>
-                </div>
-             </div>
-          </Card>
+          <Button 
+            className="w-full h-16 rounded-[40px] bg-[#E31B23] text-white font-black uppercase tracking-widest italic shadow-2xl active:scale-95 transition-all"
+            onClick={() => {
+              alert("Field Audit Data Finalized and Synced to Hub.");
+              onLogout();
+            }}
+          >
+            Finalize Field Audit
+          </Button>
        </main>
 
-       <footer className="p-6 bg-white border-t border-slate-100">
-          <p className="text-[9px] font-black text-center text-zinc-400 uppercase tracking-[0.2em] italic leading-none">
-             RSA Session Secured — Nicoz Diamond Network
-          </p>
+       <footer className="p-8 bg-white border-t border-slate-100">
+          <div className="flex flex-col items-center gap-2">
+             <p className="text-[9px] font-black text-center text-zinc-400 uppercase tracking-[0.3em] italic leading-none">
+                RSA Session Secured — Nicoz Diamond Network
+             </p>
+             <p className="text-[7px] font-bold text-zinc-300 uppercase italic">v3.1.2 Mobile Node</p>
+          </div>
        </footer>
     </div>
   );
@@ -124,77 +350,70 @@ const App: React.FC = () => {
   const [fieldSyncMode, setFieldSyncMode] = useState<{ active: boolean, claimId: string }>({ active: false, claimId: '' });
 
   useEffect(() => {
-    const initializeAuth = async () => {
-      // Check for "Direct Link" / Field Sync Handover
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('mode') === 'field_sync') {
-        const email = params.get('email') || 'assessor@firstmutual.co.zw';
-        const claimId = params.get('claimId') || 'FIELD-NODE';
-
-        // Auto-provision session for field sync
-        setSession({
-          user: {
-            id: `field-node-${Date.now()}`,
-            email: email,
-            phone: '0786413281',
-            full_name: 'FIELD OPERATOR',
-            role: UserRole.ASSESSOR,
-            created_at: new Date().toISOString()
-          }
+    // Check for "Direct Link" / Field Sync Handover
+    const params = new URLSearchParams(window.location.search);
+    
+    // Handle Payment Status
+    const paymentStatus = params.get('payment');
+    if (paymentStatus) {
+      if (paymentStatus === 'success') {
+        addNotification({
+          id: `pay-success-${Date.now()}`,
+          title: "Payment Successful",
+          message: "Your transaction has been verified and the claim ledger updated.",
+          type: 'success',
+          timestamp: new Date(),
+          isRead: false
         });
-        setFieldSyncMode({ active: true, claimId });
-        // Clear URL params without reloading
-        window.history.replaceState({}, '', window.location.pathname);
-      } else {
-        // Check Supabase auth state
-        const { data: { session: authSession } } = await supabase.auth.getSession();
+      } else if (paymentStatus === 'cancelled') {
+        addNotification({
+          id: `pay-cancel-${Date.now()}`,
+          title: "Payment Cancelled",
+          message: "The transaction was cancelled. No charges were applied.",
+          type: 'info',
+          timestamp: new Date(),
+          isRead: false
+        });
+      } else if (paymentStatus === 'error') {
+        addNotification({
+          id: `pay-error-${Date.now()}`,
+          title: "Payment Error",
+          message: "An error occurred during the payment handshake. Please try again.",
+          type: 'critical',
+          timestamp: new Date(),
+          isRead: false
+        });
+      }
+    }
 
-        if (authSession?.user) {
-          // Fetch user data from database
-          const { data: userData } = await supabase
-            .from('users')
-            .select('*')
-            .eq('id', authSession.user.id)
-            .maybeSingle();
-
-          if (userData) {
-            setSession({
-              user: {
-                id: userData.id,
-                email: userData.email,
-                phone: userData.phone,
-                full_name: userData.full_name,
-                role: userData.role as UserRole,
-                created_at: userData.created_at,
-              }
-            });
-          }
-        } else {
-          // Try localStorage as fallback
-          const saved = localStorage.getItem('autoclaim_session');
-          if (saved) {
-            try {
-              setSession(JSON.parse(saved));
-            } catch (e) {
-              localStorage.removeItem('autoclaim_session');
-            }
-          }
+    if (params.get('mode') === 'field_sync') {
+      const email = params.get('email') || 'assessor@firstmutual.co.zw';
+      const claimId = params.get('claimId') || 'FIELD-NODE';
+      
+      // Auto-provision session for field sync
+      setSession({
+        user: {
+          id: `field-node-${Date.now()}`,
+          email: email,
+          phone: '0786413281',
+          full_name: 'FIELD OPERATOR',
+          role: UserRole.ASSESSOR,
+          created_at: new Date().toISOString()
+        }
+      });
+      setFieldSyncMode({ active: true, claimId });
+      // Clear URL params without reloading
+      window.history.replaceState({}, '', window.location.pathname);
+    } else {
+      const saved = localStorage.getItem('autoclaim_session');
+      if (saved) {
+        try {
+          setSession(JSON.parse(saved));
+        } catch (e) {
+          localStorage.removeItem('autoclaim_session');
         }
       }
-    };
-
-    initializeAuth();
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, authSession) => {
-      if (!authSession) {
-        setSession(null);
-      }
-    });
-
-    return () => {
-      subscription?.unsubscribe();
-    };
+    }
   }, []);
 
   const addNotification = (n: Notification) => {
@@ -266,15 +485,13 @@ const App: React.FC = () => {
   const handleLogin = (newSession: AuthSession, rememberMe: boolean) => {
     setSession(newSession);
     if (rememberMe) {
-      localStorage.setItem('aims_remembered_user', JSON.stringify({
-        email: newSession.user.email,
-        role: newSession.user.role
-      }));
+      localStorage.setItem('autoclaim_session', JSON.stringify(newSession));
+    } else {
+      localStorage.removeItem('autoclaim_session');
     }
   };
 
-  const handleLogout = async () => {
-    await signOutUser();
+  const handleLogout = () => {
     setSession(null);
     setFieldSyncMode({ active: false, claimId: '' });
     localStorage.removeItem('autoclaim_session');
@@ -295,7 +512,7 @@ const App: React.FC = () => {
 
     switch (session.user.role) {
       case UserRole.CUSTOMER: 
-        return <CustomerDashboard activeTab={activeTab} onTabChange={setActiveTab} onLogout={handleLogout} />;
+        return <CustomerDashboard session={session} activeTab={activeTab} onTabChange={setActiveTab} onLogout={handleLogout} />;
       case UserRole.ASSESSOR: 
         return <AssessorDashboard onLogout={handleLogout} sessionEmail={session.user.email} addNotification={addNotification} />;
       case UserRole.REPAIR_PARTNER: 
@@ -305,7 +522,7 @@ const App: React.FC = () => {
       case UserRole.MANAGER: 
         return <ManagementDashboard onLogout={handleLogout} />;
       default: 
-        return <CustomerDashboard activeTab={activeTab} onTabChange={setActiveTab} onLogout={handleLogout} />;
+        return <CustomerDashboard session={session} activeTab={activeTab} onTabChange={setActiveTab} onLogout={handleLogout} />;
     }
   };
 
@@ -464,7 +681,14 @@ const App: React.FC = () => {
 
             <div className="flex items-center gap-2 md:gap-3 pl-2 md:pl-4 border-l border-slate-100 group cursor-pointer" onClick={handleLogout}>
               <div className="text-right hidden sm:block">
-                <p className="text-[11px] font-black text-black uppercase group-hover:text-[#E31B23] transition-colors truncate max-w-[120px]">{session.user.full_name}</p>
+                <div className="flex items-center justify-end gap-2">
+                  <p className="text-[11px] font-black text-black uppercase group-hover:text-[#E31B23] transition-colors truncate max-w-[120px]">{session.user.full_name}</p>
+                  {session.user.verified ? (
+                    <ShieldCheck size={12} className="text-green-500" />
+                  ) : (
+                    <ShieldAlert size={12} className="text-[#E31B23]" />
+                  )}
+                </div>
                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest truncate max-w-[120px]">{session.user.role.replace('_', ' ')}</p>
               </div>
               <div className="w-10 h-10 md:w-12 md:h-12 rounded-xl md:rounded-2xl bg-black text-white flex items-center justify-center font-black italic shadow-lg hover:bg-[#E31B23] transition-colors">
@@ -480,7 +704,7 @@ const App: React.FC = () => {
       </div>
 
       {session.user.role !== UserRole.SUPPORT_STAFF && (
-        <LiveChat session={session} />
+        <LiveChat session={session} onNavigate={setActiveTab} />
       )}
       
       {activeToast && <Toast notification={activeToast} onClose={() => setActiveToast(null)} />}

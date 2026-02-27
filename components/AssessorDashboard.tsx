@@ -11,6 +11,8 @@ import {
   MessageCircle, Construction
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
+import { io, Socket } from 'socket.io-client';
+import { aimsApi } from '../src/services/aimsApi';
 
 import type { Notification } from './Shared';
 
@@ -94,8 +96,13 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
   const [isSyncingAIMS, setIsSyncingAIMS] = useState(false);
   const [syncStep, setSyncStep] = useState<SyncStep>('choice');
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [generatedOtp, setGeneratedOtp] = useState<string | null>(null);
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
   
   const [inspectionPhotos, setInspectionPhotos] = useState<string[]>([]);
+
+  const [linkedDocuments, setLinkedDocuments] = useState<{ id: string, name: string, type: string, data: string }[]>([]);
   const [verificationMatch, setVerificationMatch] = useState<'identical' | 'variance' | 'discrepancy' | null>(null);
   const [damageReason, setDamageReason] = useState('');
   const [damagedParts, setDamagedParts] = useState<Set<string>>(new Set());
@@ -105,6 +112,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
   const [privateNotes, setPrivateNotes] = useState<string>('');
   const [noteVisibleToRepairer, setNoteVisibleToRepairer] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [scratchpad, setScratchpad] = useState<string>('');
   
   const [aiEstimate, setAiEstimate] = useState<any>(null);
   const [consistencyScore, setConsistencyScore] = useState<number | null>(null);
@@ -125,61 +133,22 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const [handshakeLogs, setHandshakeLogs] = useState<string[]>(["Assessor node ready.", "AIMS ledger link stable."]);
+  const [handshakeLogs, setHandshakeLogs] = useState<string[]>(["Assessor system ready.", "System connection stable."]);
+  const socketRef = useRef<Socket | null>(null);
 
-  const [claimsQueue, setClaimsQueue] = useState([
-    { 
-      id: 'CLM-1021', 
-      car: 'MERCEDES GLC', 
-      owner: 'JOHN DOE', 
-      priority: 'URGENT', 
-      status: 'PENDING_INSPECTION',
-      time: '10:00 AM', 
-      distance: '1.2km', 
-      userStatement: "I hit a concrete pillar in the parking lot while reversing. Rear bumper is cracked and sensors are unresponsive.", 
-      regNo: 'ABC-123', 
-      policyNo: 'ND-GOLD-9921',
-      location: '142 Herbert Chitepo Ave', 
-      phone: '0786413281',
-      email: 'j.doe@firstmutual.co.zw',
-      historyScore: '4.8/5.0',
-      assignedTo: 'assessor@firstmutual.co.zw'
-    },
-    { 
-      id: 'CLM-1022', 
-      car: 'TOYOTA RAV4', 
-      owner: 'MARY W.', 
-      priority: 'STANDARD', 
-      status: 'PENDING_INSPECTION',
-      time: '11:30 AM', 
-      distance: '4.8km', 
-      userStatement: "Stones flew from a truck on the highway, shattering the windshield and damaging the hood paint.", 
-      regNo: 'ZBW-110', 
-      policyNo: 'ND-SILVER-4401',
-      location: 'Avondale Shopping Center', 
-      phone: '0786413281',
-      email: 'mary.w@firstmutual.co.zw',
-      historyScore: '5.0/5.0',
-      assignedTo: 'assessor@firstmutual.co.zw'
-    },
-    { 
-      id: 'CLM-1023', 
-      car: 'VW GOLF 7', 
-      owner: 'PETER S.', 
-      priority: 'LOW', 
-      status: 'AWAITING_DOCS',
-      time: '02:00 PM', 
-      distance: '12.5km', 
-      userStatement: "Minor scratch on the door from a shopping trolley.", 
-      regNo: 'VW-777', 
-      policyNo: 'ND-BRONZE-1122',
-      location: 'Borrowdale Village', 
-      phone: '0786413281',
-      email: 'peter.s@firstmutual.co.zw',
-      historyScore: '4.5/5.0',
-      assignedTo: 'other@firstmutual.co.zw'
-    }
-  ]);
+  const [claimsQueue, setClaimsQueue] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchClaims = async () => {
+      try {
+        const data = await aimsApi.claims.getAll();
+        setClaimsQueue(data);
+      } catch (error) {
+        console.error("Failed to fetch claims:", error);
+      }
+    };
+    fetchClaims();
+  }, []);
 
   const assignedClaims = useMemo(() => {
     return claimsQueue.filter(c => c.assignedTo === (sessionEmail || 'assessor@firstmutual.co.zw'));
@@ -202,9 +171,19 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
     setHandshakeLogs(prev => [...prev, `Updating claim status: FIELD_AUDIT_ACTIVE`]);
     setHandshakeLogs(prev => [...prev, `Metadata push complete. Logs synchronized.`]);
     
-    setClaimsQueue(prev => prev.map(c => 
-      c.id === selectedClaimId ? { ...c, status: 'FIELD_AUDIT_ACTIVE' } : c
-    ));
+    try {
+      await fetch(`/api/claims/${selectedClaimId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'FIELD_AUDIT_ACTIVE' })
+      });
+      
+      setClaimsQueue(prev => prev.map(c => 
+        c.id === selectedClaimId ? { ...c, status: 'FIELD_AUDIT_ACTIVE' } : c
+      ));
+    } catch (error) {
+      console.error("Failed to sync status:", error);
+    }
     
     setLastSyncedAt(new Date().toLocaleTimeString());
     setIsSyncingAIMS(false);
@@ -214,7 +193,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
       addNotification({
         id: `sync-${Date.now()}`,
         title: "AIMS Sync Complete",
-        message: `Claim ${selectedClaim.id} is now synchronized with the central ledger. Status: FIELD_AUDIT_ACTIVE`,
+        message: `Claim ${selectedClaim.id} is now synchronized with the central system. Status: FIELD_AUDIT_ACTIVE`,
         type: 'success',
         timestamp: new Date(),
         isRead: false
@@ -235,20 +214,213 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
 
   // Sync Logic: Real-time Handshake Simulation
   useEffect(() => {
+    socketRef.current = io();
+
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'aims_sync_complete' && e.newValue === 'true') {
         setIsOmniSynced(true);
-        setHandshakeLogs(prev => [...prev, "External device handshake successful.", "Mobile Field Mode Active."]);
+        setHandshakeLogs(prev => [...prev, "External device connection successful.", "Mobile Field Mode Active."]);
         localStorage.removeItem('aims_sync_complete');
       }
     };
     window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      socketRef.current?.disconnect();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!selectedClaimId || !socketRef.current) return;
+
+    const socket = socketRef.current;
+    socket.emit('join-claim', selectedClaimId);
+
+    const onEvidenceAdded = (newEvidence: any) => {
+      setLinkedDocuments(prev => {
+        if (prev.find(e => e.id === newEvidence.id)) return prev;
+        return [...prev, newEvidence];
+      });
+      
+      if (newEvidence.type.startsWith('image/')) {
+        setInspectionPhotos(prev => {
+          if (prev.includes(newEvidence.data)) return prev;
+          return [...prev, newEvidence.data];
+        });
+      }
+      
+      setHandshakeLogs(prev => [...prev, `Real-time: Received evidence [${newEvidence.name}]`]);
+    };
+
+    const onNoteAdded = (newNote: any) => {
+      setClaimsQueue(prev => prev.map(c => {
+        if (c.id === selectedClaimId) {
+          const existingNotes = (c as any).notes || [];
+          if (existingNotes.find((n: any) => n.id === newNote.id)) return c;
+          return { ...c, notes: [...existingNotes, newNote] };
+        }
+        return c;
+      }));
+    };
+
+    const onMobileSynced = (data: any) => {
+      setIsOmniSynced(true);
+      setHandshakeLogs(prev => [...prev, `Handshake: Mobile node [${data.claimId}] linked.`]);
+      if (addNotification) {
+        addNotification({
+          id: `sync-${Date.now()}`,
+          title: "Field Node Connected",
+          message: `Real-time link established with mobile device for ${data.claimId}.`,
+          type: 'success',
+          timestamp: new Date(),
+          isRead: false
+        });
+      }
+    };
+
+    const onClaimUpdated = (updatedClaim: any) => {
+      if (updatedClaim.id === selectedClaimId) {
+        if (updatedClaim.scratchpad !== undefined) setScratchpad(updatedClaim.scratchpad);
+        if (updatedClaim.damageReason !== undefined) setDamageReason(updatedClaim.damageReason);
+        if (updatedClaim.damagedParts !== undefined) {
+          const parts = typeof updatedClaim.damagedParts === 'string' ? JSON.parse(updatedClaim.damagedParts) : updatedClaim.damagedParts;
+          setDamagedParts(new Set(parts));
+        }
+        if (updatedClaim.statementAgreement !== undefined) {
+          const agreement = typeof updatedClaim.statementAgreement === 'string' ? JSON.parse(updatedClaim.statementAgreement) : updatedClaim.statementAgreement;
+          setStatementAgreement(agreement);
+        }
+      }
+      setClaimsQueue(prev => prev.map(c => c.id === updatedClaim.id ? { ...c, ...updatedClaim } : c));
+    };
+
+    socket.on('evidence-added', onEvidenceAdded);
+    socket.on('note-added', onNoteAdded);
+    socket.on('mobile-synced', onMobileSynced);
+    socket.on('claim-updated', onClaimUpdated);
+
+    return () => {
+      socket.off('evidence-added', onEvidenceAdded);
+      socket.off('note-added', onNoteAdded);
+      socket.off('mobile-synced', onMobileSynced);
+      socket.off('claim-updated', onClaimUpdated);
+    };
+  }, [selectedClaimId]);
+
+  // Debounced Sync for Scratchpad & Damage Reason & Matrix
+  useEffect(() => {
+    if (!selectedClaimId) return;
+
+    const timeoutId = setTimeout(async () => {
+      const currentClaim = claimsQueue.find(c => c.id === selectedClaimId);
+      if (!currentClaim) return;
+
+      const updates: any = {};
+      let hasChanges = false;
+
+      if (scratchpad !== (currentClaim.scratchpad || '')) {
+        updates.scratchpad = scratchpad;
+        hasChanges = true;
+      }
+      if (damageReason !== (currentClaim.damageReason || '')) {
+        updates.damageReason = damageReason;
+        hasChanges = true;
+      }
+      
+      const currentDamagedParts = Array.from(damagedParts);
+      const claimDamagedParts = currentClaim.damagedParts ? (typeof currentClaim.damagedParts === 'string' ? JSON.parse(currentClaim.damagedParts) : currentClaim.damagedParts) : [];
+      if (JSON.stringify(currentDamagedParts.sort()) !== JSON.stringify(claimDamagedParts.sort())) {
+        updates.damagedParts = currentDamagedParts;
+        hasChanges = true;
+      }
+
+      const claimAgreement = currentClaim.statementAgreement ? (typeof currentClaim.statementAgreement === 'string' ? JSON.parse(currentClaim.statementAgreement) : currentClaim.statementAgreement) : {};
+      if (JSON.stringify(statementAgreement) !== JSON.stringify(claimAgreement)) {
+        updates.statementAgreement = statementAgreement;
+        hasChanges = true;
+      }
+
+      if (hasChanges) {
+        try {
+          await fetch(`/api/claims/${selectedClaimId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates)
+          });
+        } catch (e) {
+          console.error("Failed to auto-sync claim updates", e);
+        }
+      }
+    }, 1500);
+
+    return () => clearTimeout(timeoutId);
+  }, [scratchpad, damageReason, damagedParts, statementAgreement, selectedClaimId]);
+
+  const handleSendOtp = async () => {
+    if (!phoneNumber) return;
+    setIsSendingOtp(true);
+    setSyncStep('handshake');
+    
+    // Simulate network delay for the handshake initiation
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Generate a random 6-digit code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    setGeneratedOtp(code);
+    
+    // In a real app, this would be sent via SMS. 
+    // For this prototype, we'll show it in a notification to simulate the "received" SMS.
+    if (addNotification) {
+      addNotification({
+        id: `otp-${Date.now()}`,
+        title: "SMS Gateway: Auth Code",
+        message: `Your AIMS Field Sync code is: ${code}. Valid for 5 minutes.`,
+        type: 'info',
+        timestamp: new Date(),
+        isRead: false
+      });
+    }
+    
+    setIsSendingOtp(false);
+    setSyncStep('otp');
+  };
+
+  const handleVerifyOtp = async () => {
+    if (otpCode === generatedOtp || otpCode === '123456') { // Allow 123456 as a master bypass for testing
+      setSyncStep('handshake');
+      
+      // Finalizing the handshake
+      setTimeout(() => {
+        setIsOmniSynced(true);
+        setSyncStep('success');
+        setTimeout(() => setShowSyncModal(false), 1500);
+      }, 1500);
+    } else {
+      if (addNotification) {
+        addNotification({
+          id: `otp-err-${Date.now()}`,
+          title: "Verification Failed",
+          message: "The entered code is incorrect or has expired.",
+          type: 'error',
+          timestamp: new Date(),
+          isRead: false
+        });
+      }
+      setOtpCode('');
+    }
+  };
 
   const selectClaim = (claimId: string) => {
     setSelectedClaimId(claimId);
-    setInspectionPhotos([]);
+    const claim = claimsQueue.find(c => c.id === claimId);
+    if (claim) {
+      setInspectionPhotos(claim.evidence?.filter((e: any) => e.type.startsWith('image/')).map((e: any) => e.data) || []);
+      setLinkedDocuments(claim.evidence || []);
+    } else {
+      setInspectionPhotos([]);
+      setLinkedDocuments([]);
+    }
     setVerificationMatch(null);
     setDamageReason('');
     setDamagedParts(new Set());
@@ -261,38 +433,44 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
     setLastSyncedAt(null);
     setIsFinalizing(false);
     setActiveConsoleTab('audit');
-    setHandshakeLogs(prev => [...prev, `Claim ${claimId} initialized.`, `Loading dossier...`]);
+    setHandshakeLogs(prev => [...prev, `Claim ${claimId} initialized.`, `Loading details...`]);
   };
 
-  const handleSaveNotes = () => {
+  const handleSaveNotes = async () => {
     if (!selectedClaimId || !privateNotes.trim()) return;
     
-    const newNote: PrivateNote = {
-      id: `note-${Date.now()}`,
-      text: privateNotes,
-      timestamp: new Date().toLocaleString(),
-      visibleToRepairer: noteVisibleToRepairer
-    };
+    try {
+      const response = await fetch(`/api/claims/${selectedClaimId}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: privateNotes, visibleToRepairer: noteVisibleToRepairer })
+      });
 
-    setClaimsQueue(prev => prev.map(c => {
-      if (c.id === selectedClaimId) {
-        const existingNotes = (c as any).notes || [];
-        return { ...c, notes: [...existingNotes, newNote] };
+      if (response.ok) {
+        const newNote = await response.json();
+        setClaimsQueue(prev => prev.map(c => {
+          if (c.id === selectedClaimId) {
+            const existingNotes = (c as any).notes || [];
+            return { ...c, notes: [...existingNotes, newNote] };
+          }
+          return c;
+        }));
+
+        setPrivateNotes('');
+        setNoteVisibleToRepairer(false);
+
+        addNotification?.({
+          id: `save-notes-${Date.now()}`,
+          title: "Note Added",
+          message: `A new private note has been added to ${selectedClaimId}.`,
+          type: 'success',
+          timestamp: new Date(),
+          isRead: false
+        });
       }
-      return c;
-    }));
-
-    setPrivateNotes('');
-    setNoteVisibleToRepairer(false);
-
-    addNotification?.({
-      id: `save-notes-${Date.now()}`,
-      title: "Note Added",
-      message: `A new private note has been added to ${selectedClaimId}.`,
-      type: 'success',
-      timestamp: new Date(),
-      isRead: false
-    });
+    } catch (error) {
+      console.error("Failed to save note:", error);
+    }
   };
 
   const togglePart = (part: string) => {
@@ -302,7 +480,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
       else next.add(part);
       return next;
     });
-    setHandshakeLogs(prev => [...prev, `Telemetry: Updated structural node [${part}]`]);
+    setHandshakeLogs(prev => [...prev, `Update: Updated structural part [${part}]`]);
   };
 
   const calculateConsistency = async () => {
@@ -334,10 +512,36 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
     if (files) {
       (Array.from(files) as File[]).forEach(file => {
         const reader = new FileReader();
-        reader.onloadend = () => setInspectionPhotos(prev => [...prev, reader.result as string]);
+        reader.onloadend = async () => {
+          const data = reader.result as string;
+          const newEvidence = {
+            id: Math.random().toString(36).substr(2, 9),
+            name: file.name,
+            type: file.type,
+            data: data
+          };
+
+          try {
+            const res = await fetch(`/api/claims/${selectedClaimId}/evidence`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(newEvidence)
+            });
+            
+            if (res.ok) {
+              const saved = await res.json();
+              if (file.type.startsWith('image/')) {
+                setInspectionPhotos(prev => [...prev, saved.data]);
+              }
+              setLinkedDocuments(prev => [...prev, saved]);
+            }
+          } catch (err) {
+            console.error("Failed to upload evidence", err);
+          }
+        };
         reader.readAsDataURL(file);
       });
-      setHandshakeLogs(prev => [...prev, `${files.length} evidence frames synced.`]);
+      setHandshakeLogs(prev => [...prev, `${files.length} evidence items synced.`]);
     }
   };
 
@@ -359,8 +563,23 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
     } catch(e) {}
 
     await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    try {
+      await fetch(`/api/claims/${selectedClaimId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          status: 'INSPECTION_COMPLETE',
+          neuralSummary: neuralSummary,
+          consistencyScore: consistencyScore
+        })
+      });
+    } catch (e) {
+      console.error("Failed to sync final report status", e);
+    }
+
     setSyncedClaimIds(prev => new Set(prev).add(selectedClaim.id));
-    setHandshakeLogs(prev => [...prev, "Sync complete. Claim AIMS-" + selectedClaim.id + " immutable."]);
+    setHandshakeLogs(prev => [...prev, "Sync complete. Claim AIMS-" + selectedClaim.id + " finalized."]);
     setIsFinalizing(false);
   };
 
@@ -422,7 +641,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
   }, [selectedClaim?.id, sessionEmail]);
 
   const isDiscrepancy = verificationMatch === 'variance' || verificationMatch === 'discrepancy';
-  const isAuditReady = inspectionPhotos.length > 0 && 
+  const isAuditReady = (inspectionPhotos.length > 0 || linkedDocuments.length > 0) && 
                        verificationMatch && 
                        damagedParts.size > 0 && 
                        (!isDiscrepancy || damageReason.trim().length > 15);
@@ -476,6 +695,20 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
             </Card>
           ))}
         </div>
+
+        <div className="p-4 border-t border-slate-100 bg-white">
+           <div className="flex items-center gap-2 mb-3">
+              <ClipboardList size={14} className="text-[#E31B23]" />
+              <h4 className="text-[9px] font-black uppercase tracking-widest italic text-black">Field Scratchpad</h4>
+           </div>
+           <textarea 
+             value={scratchpad}
+             onChange={(e) => setScratchpad(e.target.value)}
+             placeholder="QUICK NOTES / OBSERVATIONS..."
+             className="w-full h-24 bg-slate-50 border border-slate-200 rounded-xl p-3 text-[10px] font-bold italic outline-none focus:border-black transition-all resize-none placeholder:text-zinc-300"
+           />
+           <p className="text-[7px] font-bold text-zinc-400 uppercase italic mt-2 text-right">Drafting locally on dashboard</p>
+        </div>
       </aside>
 
       {/* Workspace */}
@@ -489,6 +722,8 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                   <h2 className="text-xl md:text-2xl font-black uppercase italic tracking-tighter leading-none text-black">AIMS Session: {selectedClaim.id}</h2>
                   <div className="flex items-center gap-2 mt-1.5">
                     <p className="text-[8px] font-bold uppercase tracking-widest text-[#E31B23] italic">Real-time Field Diagnostic Mode</p>
+                    <span className="text-[8px] font-black text-zinc-300">•</span>
+                    <span className="text-[8px] font-black uppercase tracking-widest text-zinc-400 italic">Manual Input Active</span>
                     <span className="text-[8px] font-black text-zinc-300">•</span>
                     <span className={`text-[8px] font-black uppercase italic ${selectedClaim.status === 'FIELD_AUDIT_ACTIVE' ? 'text-green-500' : 'text-zinc-400'}`}>
                       {selectedClaim.status.replace('_', ' ')}
@@ -580,7 +815,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                               <div className="p-3 bg-red-50 text-[#E31B23] rounded-xl shadow-sm"><Layers size={22} /></div>
                               <div>
                                 <h3 className="text-xs font-black uppercase tracking-widest italic text-black">Audit Hotspots</h3>
-                                <p className="text-[9px] font-bold text-zinc-400 uppercase italic mt-1">Select structural nodes</p>
+                                <p className="text-[9px] font-bold text-zinc-400 uppercase italic mt-1">Select structural parts</p>
                               </div>
                             </div>
                             <VehicleDamageMap 
@@ -709,7 +944,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                                 <div className="p-3 bg-zinc-50 text-black rounded-xl shadow-sm"><Camera size={20} /></div>
                                 <h3 className="text-xs font-black uppercase tracking-widest italic text-black">Evidence Telemetry</h3>
                               </div>
-                              <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest">{inspectionPhotos.length} Frames Linked</span>
+                              <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest">{linkedDocuments.length} Items Linked</span>
                            </div>
                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                              <button 
@@ -718,8 +953,8 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                                className="aspect-square bg-slate-50 border-2 border-dashed border-zinc-200 rounded-2xl flex flex-col items-center justify-center gap-2 hover:border-black hover:bg-slate-100 transition-all group overflow-hidden disabled:opacity-50"
                              >
                                <Plus size={24} className="text-zinc-300 group-hover:text-black" />
-                               <span className="text-[8px] font-black uppercase text-zinc-400 italic">Add Frame</span>
-                               <input type="file" ref={fileInputRef} className="hidden" multiple accept="image/*" onChange={handleFileUpload} />
+                               <span className="text-[8px] font-black uppercase text-zinc-400 italic">Add Evidence</span>
+                               <input type="file" ref={fileInputRef} className="hidden" multiple accept="image/*,.pdf,.doc,.docx" onChange={handleFileUpload} />
                              </button>
 
                              {inspectionPhotos.map((photo, i) => (
@@ -728,10 +963,73 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                                </div>
                              ))}
                            </div>
+
+                           {linkedDocuments.some(doc => !doc.type.startsWith('image/')) && (
+                             <div className="pt-4 space-y-3">
+                                <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest italic">Linked Documents</p>
+                                <div className="space-y-2">
+                                   {linkedDocuments.filter(doc => !doc.type.startsWith('image/')).map((doc) => (
+                                     <div key={doc.id} className="flex items-center justify-between p-3 bg-zinc-900/50 rounded-xl border border-white/5 group hover:border-white/20 transition-all">
+                                        <div className="flex items-center gap-3">
+                                           <div className="p-2 bg-[#E31B23]/10 text-[#E31B23] rounded-lg">
+                                              <FileText size={16} />
+                                           </div>
+                                           <div>
+                                              <p className="text-[10px] font-black uppercase italic text-zinc-300">{doc.name}</p>
+                                              <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest">{doc.type.split('/')[1] || 'DOCUMENT'}</p>
+                                           </div>
+                                        </div>
+                                        <button className="p-2 text-zinc-500 hover:text-white transition-colors">
+                                           <Search size={14} />
+                                        </button>
+                                     </div>
+                                   ))}
+                                </div>
+                             </div>
+                           )}
                         </Card>
                       </div>
 
                       <div className="lg:col-span-4 space-y-8">
+                        {isOmniSynced && (
+                          <Card className="p-6 bg-white border-2 border-green-100 rounded-[32px] shadow-xl space-y-4 animate-in slide-in-from-top-4 duration-500">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2.5 bg-green-50 text-green-600 rounded-xl"><ShieldCheck size={20}/></div>
+                              <h3 className="text-xs font-black uppercase tracking-widest italic text-black">Live Handshake Status</h3>
+                            </div>
+                            <p className="text-[10px] font-medium text-zinc-500 italic leading-relaxed">
+                              Mobile node synchronized with desktop session. Captured evidence and chat logs will propagate to the hub in real-time.
+                            </p>
+                          </Card>
+                        )}
+
+                        {isOmniSynced && (
+                          <Card className="p-8 bg-zinc-950 text-white rounded-[32px] space-y-6 border-none shadow-2xl relative overflow-hidden animate-in slide-in-from-top-4 duration-700">
+                             <div className="absolute top-0 right-0 p-4 opacity-10"><Activity size={80}/></div>
+                             <div className="relative z-10 space-y-4">
+                                <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Incoming Comms (Field)</p>
+                                <div className="p-4 bg-white/5 rounded-2xl border border-white/10 italic text-[11px] font-medium leading-relaxed">
+                                   "Please confirm when you've reached the vehicle location."
+                                </div>
+                                <div className="flex gap-2">
+                                   <input 
+                                     className="flex-1 bg-zinc-900 border border-white/5 rounded-xl px-4 py-3 text-[11px] font-bold italic outline-none focus:border-[#E31B23]" 
+                                     placeholder="Quick response..." 
+                                     value={chatInput}
+                                     onChange={(e) => setChatInput(e.target.value)}
+                                     onKeyDown={(e) => e.key === 'Enter' && sendChatMessage(e as any)}
+                                   />
+                                   <button 
+                                     onClick={() => sendChatMessage({ preventDefault: () => {} } as any)}
+                                     className="p-3 bg-[#E31B23] text-white rounded-xl shadow-lg hover:bg-red-700 transition-colors"
+                                   >
+                                     <Send size={18}/>
+                                   </button>
+                                </div>
+                             </div>
+                          </Card>
+                        )}
+
                         <Card className="p-8 bg-white border-2 border-slate-100 rounded-[32px] shadow-xl space-y-8">
                            <div className="flex items-center gap-4">
                               <div className="p-3 bg-zinc-50 text-black rounded-xl shadow-sm"><User size={22} /></div>
@@ -742,18 +1040,28 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                            </div>
                            
                            <div className="space-y-5">
-                              <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100 group hover:border-black transition-all">
-                                 <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-[#E31B23] shadow-sm"><Phone size={18} /></div>
-                                 <div className="min-w-0">
-                                    <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Phone Node</p>
-                                    <p className="text-[11px] font-black text-black italic truncate">{selectedClaim.phone}</p>
+                              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100 group hover:border-black transition-all">
+                                 <div className="flex items-center gap-4">
+                                    <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-[#E31B23] shadow-sm"><Phone size={18} /></div>
+                                    <div className="min-w-0">
+                                       <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Phone Number</p>
+                                       <p className="text-[11px] font-black text-black italic truncate">{selectedClaim.phone}</p>
+                                    </div>
                                  </div>
+                                 <Button 
+                                   variant="secondary"
+                                   size="sm"
+                                   className="h-8 px-3 text-[8px] rounded-lg"
+                                   onClick={() => window.location.href = `tel:${selectedClaim.phone}`}
+                                 >
+                                   Call Customer
+                                 </Button>
                               </div>
                               
                               <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100 group hover:border-black transition-all">
                                  <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-[#E31B23] shadow-sm"><Mail size={18} /></div>
                                  <div className="min-w-0">
-                                    <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Email Node</p>
+                                    <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Email Address</p>
                                     <p className="text-[11px] font-black text-black italic truncate">{selectedClaim.email}</p>
                                  </div>
                               </div>
@@ -761,7 +1069,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                               <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100 group hover:border-black transition-all">
                                  <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-[#E31B23] shadow-sm"><MapPin size={18} /></div>
                                  <div className="min-w-0">
-                                    <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Location Node</p>
+                                    <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Address</p>
                                     <p className="text-[11px] font-black text-black italic leading-tight">{selectedClaim.location}</p>
                                  </div>
                               </div>
@@ -870,6 +1178,85 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                           <div className="flex-1 overflow-hidden">
                              <NeuralFeed logs={handshakeLogs} />
                           </div>
+                        </Card>
+
+                        <Card className="p-8 border-none shadow-xl bg-white rounded-[32px] space-y-6">
+                           <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-4">
+                                <div className="p-3 bg-zinc-900 text-white rounded-xl shadow-sm"><FileText size={22} /></div>
+                                <div>
+                                  <h3 className="text-xs font-black uppercase tracking-widest italic text-black">Private Assessor Notes</h3>
+                                  <p className="text-[9px] font-bold text-zinc-400 uppercase italic mt-1">Confidential internal documentation</p>
+                                </div>
+                              </div>
+                           </div>
+
+                           {((selectedClaim as any)?.notes || []).length > 0 && (
+                             <div className="space-y-4 max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                               {((selectedClaim as any).notes as PrivateNote[]).map((note) => (
+                                 <div key={note.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-2 relative group">
+                                   <div className="flex justify-between items-start">
+                                     <span className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">{note.timestamp}</span>
+                                     {note.visibleToRepairer && (
+                                       <Badge className="bg-blue-50 text-blue-600 border-none text-[7px] font-black px-2 py-0.5 rounded-md">VISIBLE TO REPAIRER</Badge>
+                                     )}
+                                   </div>
+                                   <p className="text-[11px] font-medium text-slate-700 italic leading-relaxed">
+                                     {note.text}
+                                   </p>
+                                 </div>
+                               ))}
+                             </div>
+                           )}
+
+                           <div className="space-y-4 pt-4 border-t border-slate-100">
+                             <div className="relative">
+                               <textarea 
+                                 value={privateNotes}
+                                 onChange={(e) => setPrivateNotes(e.target.value)}
+                                 disabled={isClaimAlreadySynced}
+                                 maxLength={500}
+                                 placeholder="Enter private observations, risk assessments, or internal notes..."
+                                 className="w-full h-32 bg-zinc-50 border-2 border-zinc-100 rounded-2xl p-6 text-xs font-medium outline-none focus:border-black transition-all italic shadow-inner"
+                               />
+                               <div className="absolute bottom-4 right-4 text-[8px] font-black text-zinc-300 uppercase tracking-widest italic">
+                                 {privateNotes.length} / 500
+                               </div>
+                             </div>
+                             
+                             <div className="flex items-center gap-3 px-2">
+                               <input 
+                                 type="checkbox" 
+                                 id="visibleToRepairerAudit"
+                                 checked={noteVisibleToRepairer}
+                                 onChange={(e) => setNoteVisibleToRepairer(e.target.checked)}
+                                 disabled={isClaimAlreadySynced}
+                                 className="w-4 h-4 rounded border-zinc-300 text-black focus:ring-black"
+                               />
+                               <label htmlFor="visibleToRepairerAudit" className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest cursor-pointer">
+                                 Make visible to Repair Partner
+                                </label>
+                             </div>
+                           </div>
+
+                           <div className="flex justify-between items-center">
+                              <p className="text-[8px] font-bold text-zinc-400 uppercase italic tracking-widest">Only visible to Assessor, Repair Partner & Support</p>
+                              <div className="flex items-center gap-3">
+                                {privateNotes.length > 0 && !isClaimAlreadySynced && (
+                                  <div className="flex items-center gap-2 text-green-600 animate-pulse">
+                                     <div className="w-1.5 h-1.5 bg-green-500 rounded-full" />
+                                     <span className="text-[8px] font-black uppercase tracking-widest italic">Draft Active</span>
+                                  </div>
+                                )}
+                                <Button 
+                                  onClick={handleSaveNotes}
+                                  disabled={isClaimAlreadySynced || !privateNotes.trim()}
+                                  className="h-8 px-4 bg-black text-white text-[8px] font-black rounded-lg hover:bg-zinc-800 transition-all"
+                                >
+                                  ADD NOTE
+                                </Button>
+                              </div>
+                           </div>
                         </Card>
                       </div>
                     </div>
@@ -1002,13 +1389,19 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                             )}
 
                             <div className="space-y-4 pt-4 border-t border-slate-100">
-                              <textarea 
-                                value={privateNotes}
-                                onChange={(e) => setPrivateNotes(e.target.value)}
-                                disabled={isClaimAlreadySynced}
-                                placeholder="Enter private observations, risk assessments, or internal notes..."
-                                className="w-full h-32 bg-zinc-50 border-2 border-zinc-100 rounded-2xl p-6 text-xs font-medium outline-none focus:border-black transition-all italic shadow-inner"
-                              />
+                              <div className="relative">
+                                <textarea 
+                                  value={privateNotes}
+                                  onChange={(e) => setPrivateNotes(e.target.value)}
+                                  disabled={isClaimAlreadySynced}
+                                  maxLength={500}
+                                  placeholder="Enter private observations, risk assessments, or internal notes..."
+                                  className="w-full h-32 bg-zinc-50 border-2 border-zinc-100 rounded-2xl p-6 text-xs font-medium outline-none focus:border-black transition-all italic shadow-inner"
+                                />
+                                <div className="absolute bottom-4 right-4 text-[8px] font-black text-zinc-300 uppercase tracking-widest italic">
+                                  {privateNotes.length} / 500
+                                </div>
+                              </div>
                               
                               <div className="flex items-center gap-3 px-2">
                                 <input 
@@ -1134,7 +1527,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
              </div>
              <div className="space-y-6 max-w-sm">
                 <h2 className="text-4xl font-black uppercase tracking-tighter italic text-black leading-none">Ready for Audit</h2>
-                <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-widest leading-relaxed italic">Select an inspection node to initialize the Comparative Audit Handshake protocol.</p>
+                <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-widest leading-relaxed italic">Select an inspection area to initialize the Comparative Audit process.</p>
              </div>
           </div>
         )}
@@ -1166,13 +1559,67 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                     </div>
                   </div>
                 )}
-                {(syncStep === 'phone' || syncStep === 'otp') && (
-                  <div className="space-y-6 text-center">
-                    <p className="text-[10px] font-black uppercase text-zinc-400 italic">Standard Handshake Protocol</p>
-                    <div className="p-6 bg-zinc-50 rounded-2xl border border-zinc-100 text-[10px] font-bold text-zinc-400 italic">
-                      SMS Gateway initialized. Enter node identity to dispatch OTP.
+                {syncStep === 'phone' && (
+                  <div className="space-y-6 text-center animate-in slide-in-from-bottom-4">
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-black uppercase text-zinc-400 italic">Standard Sync Protocol</p>
+                      <h4 className="text-sm font-black uppercase italic">Enter Mobile Number</h4>
                     </div>
-                    <Button onClick={() => { setSyncStep('handshake'); setTimeout(() => { setIsOmniSynced(true); setSyncStep('success'); setTimeout(() => setShowSyncModal(false), 1500); }, 1500); }} className="w-full h-14 rounded-2xl shadow-xl italic font-black">BYPASS FOR PROTOTYPE</Button>
+                    <div className="relative">
+                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
+                      <input 
+                        type="tel"
+                        value={phoneNumber}
+                        onChange={(e) => setPhoneNumber(e.target.value)}
+                        placeholder="+263 7XX XXX XXX"
+                        className="w-full h-14 bg-zinc-50 border-2 border-zinc-100 rounded-2xl pl-12 pr-4 text-xs font-black italic outline-none focus:border-black transition-all"
+                      />
+                    </div>
+                    <Button 
+                      disabled={phoneNumber.length < 8 || isSendingOtp}
+                      onClick={handleSendOtp} 
+                      className="w-full h-14 rounded-2xl shadow-xl italic font-black bg-black text-white hover:bg-zinc-800"
+                    >
+                      {isSendingOtp ? <Loader2 size={18} className="animate-spin mx-auto" /> : 'SEND AUTH CODE'}
+                    </Button>
+                    <button onClick={() => setSyncStep('choice')} className="text-[9px] font-black uppercase text-zinc-400 hover:text-black transition-colors">Back to Options</button>
+                  </div>
+                )}
+                {syncStep === 'otp' && (
+                  <div className="space-y-6 text-center animate-in slide-in-from-bottom-4">
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-black uppercase text-zinc-400 italic">Verification Required</p>
+                      <h4 className="text-sm font-black uppercase italic">Enter 6-Digit Code</h4>
+                      <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Sent to {phoneNumber}</p>
+                    </div>
+                    <div className="relative">
+                      <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
+                      <input 
+                        type="text"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="0 0 0 0 0 0"
+                        className="w-full h-14 bg-zinc-50 border-2 border-zinc-100 rounded-2xl pl-12 pr-4 text-center text-lg font-black tracking-[0.5em] italic outline-none focus:border-black transition-all"
+                      />
+                    </div>
+                    <Button 
+                      disabled={otpCode.length !== 6}
+                      onClick={handleVerifyOtp} 
+                      className="w-full h-14 rounded-2xl shadow-xl italic font-black bg-[#E31B23] text-white hover:bg-red-700"
+                    >
+                      VERIFY & SYNC
+                    </Button>
+                    <div className="flex flex-col gap-2">
+                      <button onClick={handleSendOtp} className="text-[9px] font-black uppercase text-zinc-400 hover:text-black transition-colors">Resend Code</button>
+                      <button onClick={() => { 
+                        setSyncStep('handshake'); 
+                        setTimeout(() => { 
+                          setIsOmniSynced(true); 
+                          setSyncStep('success'); 
+                          setTimeout(() => setShowSyncModal(false), 1500); 
+                        }, 1000); 
+                      }} className="text-[7px] font-black uppercase text-zinc-300 hover:text-zinc-500 transition-colors italic">Bypass for Prototype</button>
+                    </div>
                   </div>
                 )}
                 {syncStep === 'qr' && (
@@ -1181,14 +1628,24 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                         <QRCodeUI value={syncUrl} label="SESSION TRANSFER" />
                      </div>
                      <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 text-[9px] font-bold text-zinc-500 uppercase tracking-widest italic leading-relaxed">
-                       Scan with your mobile device to transfer your active session and claim dossier to the Field Assistant app.
+                       Scan with your mobile device to transfer your active session and claim details to the Field Assistant app.
                      </div>
                   </div>
                 )}
                 {syncStep === 'handshake' && (
                   <div className="py-12 flex flex-col items-center gap-8">
-                    <Loader2 size={64} className="animate-spin text-[#E31B23]" />
-                    <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400 italic">Syncing Payload...</p>
+                    <div className="relative">
+                      <div className="absolute inset-0 bg-[#E31B23] blur-3xl opacity-10 animate-pulse" />
+                      <Loader2 size={64} className="animate-spin text-[#E31B23] relative z-10" />
+                    </div>
+                    <div className="space-y-2 text-center">
+                      <p className="text-[10px] font-black uppercase tracking-[0.3em] text-black italic">
+                        {isSendingOtp ? 'Requesting Secure Code...' : 'Finalizing RSA Link...'}
+                      </p>
+                      <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">
+                        {isSendingOtp ? `Contacting device node at ${phoneNumber}` : 'Establishing encrypted data tunnel'}
+                      </p>
+                    </div>
                   </div>
                 )}
                 {syncStep === 'success' && (

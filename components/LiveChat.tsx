@@ -1,8 +1,9 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, GenerateContentResponse, Type } from "@google/genai";
 import { MessageSquare, X, Send, User, Loader2, MinusCircle, Maximize2, ShieldCheck, Zap } from 'lucide-react';
 import { AuthSession, UserRole } from '../types';
+import { aimsApi } from '../src/services/aimsApi';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -12,17 +13,18 @@ interface Message {
 
 interface LiveChatProps {
   session: AuthSession;
-  context?: string; // Added optional context prop
+  context?: string;
+  onNavigate?: (tab: string) => void;
 }
 
-const LiveChat: React.FC<LiveChatProps> = ({ session, context }) => {
+const LiveChat: React.FC<LiveChatProps> = ({ session, context, onNavigate }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: `Hello ${session.user.full_name}, I'm your AutoClaim Pro assistant. ${context ? "I have synced with your current dashboard view. How can I assist with your queue today?" : "How can I help you today?"}`,
+      content: `Hello ${session.user.full_name}, I'm your AIMS AI Assistant. ${context ? "I'm synced with your dashboard. How can I help you navigate or manage your tasks?" : "How can I help you today?"}`,
       timestamp: new Date()
     }
   ]);
@@ -54,45 +56,61 @@ const LiveChat: React.FC<LiveChatProps> = ({ session, context }) => {
     setIsLoading(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const chat = ai.chats.create({
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
+        contents: input,
         config: {
-          systemInstruction: `You are an expert support agent for AutoClaim Pro (First Mutual Holdings). 
-          Role: ${session.user.role}. User: ${session.user.full_name}. 
+          systemInstruction: `You are the AIMS (AutoClaim Information Management System) AI Navigator.
+          User Role: ${session.user.role}. User: ${session.user.full_name}.
           
-          CURRENT DASHBOARD CONTEXT:
-          ${context || "No specific dashboard context provided."}
+          CAPABILITIES:
+          1. NAVIGATION: You can help the user navigate the app. If they want to see "claims", "stats", "staff", or "settings", suggest the appropriate tab.
+          2. DATA RETRIEVAL: You have access to the AIMS API (aimsApi) for claims, staff, and system stats.
+          3. SUPPORT: Answer questions about insurance policies and repair lifecycles.
           
-          Instructions:
-          - Use the context provided to answer questions about specific claims, billing, or policies.
-          - If the user asks about a claim in the list, refer to its status and risk level.
-          - Be professional, concise, and focused on helping the staff manage the repair lifecycle efficiently.
-          - Use a helpful, authoritative, yet friendly tone.`,
+          CONTEXT:
+          ${context || "Main Dashboard"}
+          
+          AVAILABLE TABS (Role Dependent):
+          - Customer: 'track', 'new', 'history'
+          - Support: 'main', 'claims', 'staff', 'audit'
+          - Manager: 'overview', 'performance', 'risk'
+          
+          INSTRUCTIONS:
+          - If the user wants to navigate, respond with a JSON object in your text if possible, or just tell them where to go.
+          - Be extremely professional and efficient.
+          - Use the AIMS API terminology: "Claims Ledger", "Staff Load", "Compliance Index".`,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              reply: { type: Type.STRING, description: "Your text response to the user" },
+              navigateTo: { type: Type.STRING, description: "The tab ID to navigate to, if applicable" },
+              apiAction: { type: Type.STRING, description: "The AIMS API action to perform, if applicable" }
+            },
+            required: ["reply"]
+          }
         },
       });
 
-      const streamResponse = await chat.sendMessageStream({ message: input });
+      const result = JSON.parse(response.text || '{}');
       
-      let assistantContent = "";
-      setMessages(prev => [...prev, { role: 'assistant', content: '', timestamp: new Date() }]);
-
-      for await (const chunk of streamResponse) {
-        const c = chunk as GenerateContentResponse;
-        const text = c.text;
-        if (text) {
-          assistantContent += text;
-          setMessages(prev => {
-            const last = prev[prev.length - 1];
-            const others = prev.slice(0, -1);
-            return [...others, { ...last, content: assistantContent }];
-          });
-        }
+      if (result.navigateTo && onNavigate) {
+        onNavigate(result.navigateTo);
       }
-    } catch (error) {
+
       setMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: "I'm having trouble connecting. Please try again later.", 
+        content: result.reply || "I'm here to help.", 
+        timestamp: new Date() 
+      }]);
+
+    } catch (error) {
+      console.error("Gemini Error:", error);
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: "I'm having trouble connecting to the AIMS Neural Link. Please try again.", 
         timestamp: new Date() 
       }]);
     } finally {

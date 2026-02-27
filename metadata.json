@@ -1,6 +1,6 @@
 {
-  "name": "Remix: Claims Processing System",
-  "description": "The official digital claims management platform for Nicoz Diamond Insurance, a subsidiary of First Mutual Holdings, providing seamless repair lifecycles for customers and partners.",
+  "name": " Claims Processing System",
+  "description": "A user-friendly claims management platform for Nicoz Diamond Insurance, making it easy for customers to track claims and for partners to manage repairs.",
   "requestFramePermissions": [
     "camera",
     "geolocation"
