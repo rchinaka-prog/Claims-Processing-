@@ -93,6 +93,7 @@ export interface Claim {
   quoteAmount?: number;
   policyCoverage?: number;
   privateNotes?: string;
+  dueDate?: string;
   timeline: TimelineEvent[];
 }
 
@@ -104,6 +105,5 @@ export interface TimelineEvent {
 
 declare global {
   interface Window {
-    // Stripe is loaded via script or SDK
   }
 }

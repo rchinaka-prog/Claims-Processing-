@@ -29,6 +29,11 @@ export interface Claim {
   damageReason?: string;
   damagedParts?: string[];
   statementAgreement?: Record<number, boolean>;
+  assignedAssessor?: string;
+  repairEvidence?: string | any[];
+  startDate?: string;
+  endDate?: string;
+  dueDate?: string;
 }
 
 export interface Staff {
@@ -57,6 +62,15 @@ export const aimsApi = {
     getById: async (id: string): Promise<Claim> => {
       const res = await fetch(`/api/claims/${id}`);
       if (!res.ok) throw new Error(`Failed to fetch claim ${id}`);
+      return res.json();
+    },
+    create: async (claim: Partial<Claim>): Promise<Claim> => {
+      const res = await fetch('/api/claims', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(claim),
+      });
+      if (!res.ok) throw new Error('Failed to create claim');
       return res.json();
     },
     update: async (id: string, updates: Partial<Claim>): Promise<Claim> => {
@@ -130,29 +144,34 @@ export const aimsApi = {
       const res = await fetch('/api/audit');
       if (!res.ok) throw new Error('Failed to fetch audit logs');
       return res.json();
+    },
+    getUsers: async (): Promise<any[]> => {
+      const res = await fetch('/api/auth/users');
+      if (!res.ok) throw new Error('Failed to fetch users');
+      return res.json();
     }
   },
 
   /**
-   * Payments (Stripe)
+   * Payments (Paynow)
    */
   payments: {
-    createCheckoutSession: async (data: { amount: number, claimId: string, customerName: string }): Promise<any> => {
-      const res = await fetch('/api/stripe/create-checkout-session', {
+    initiate: async (data: { amount: number, claimId: string, email: string }): Promise<any> => {
+      const res = await fetch('/api/payment/initiate-paynow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error('Failed to create checkout session');
+      if (!res.ok) throw new Error('Failed to initiate Paynow payment');
       return res.json();
     },
-    confirmPayment: async (data: { sessionId: string, claimId: string }): Promise<any> => {
-      const res = await fetch('/api/stripe/confirm-payment', {
+    checkStatus: async (data: { pollUrl: string, claimId: string }): Promise<any> => {
+      const res = await fetch('/api/payment/check-paynow-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error('Failed to confirm payment');
+      if (!res.ok) throw new Error('Failed to check Paynow status');
       return res.json();
     }
   }

@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Card, Button, Badge, NeuralFeed, QRCodeUI } from './Shared';
 import { aimsApi } from '../src/services/aimsApi';
 import { 
@@ -26,13 +26,13 @@ interface InterventionLog {
 interface StaffMember {
   id: string;
   name: string;
-  role: 'Assessor' | 'Support' | 'Repair Partner';
+  role: string;
   rating: number;
   totalClaims: number;
   email: string;
   avatar: string;
   load: number; // 0-100
-  complianceStatus: 'COMPLIANT' | 'SLA_VIOLATION' | 'KYC_PENDING' | 'AUDIT_REQUIRED';
+  complianceStatus: string;
   interventions: InterventionLog[];
 }
 
@@ -43,6 +43,7 @@ interface EmailDraft {
   body: string;
   staffId: string;
   isUrgent: boolean;
+  sendLaterAt?: string;
 }
 
 const RecruitNodeModal: React.FC<{ 
@@ -144,6 +145,16 @@ const EmailDraftModal: React.FC<{
 }> = ({ draft, onClose, onSend, isSending }) => {
   const [editedBody, setEditedBody] = useState(draft.body);
   const [editedSubject, setEditedSubject] = useState(draft.subject);
+  const [sendLater, setSendLater] = useState(false);
+  const [sendLaterAt, setSendLaterAt] = useState('');
+  const editorRef = useRef<HTMLDivElement>(null);
+
+  const execCommand = (command: string, value?: string) => {
+    document.execCommand(command, false, value);
+    if (editorRef.current) {
+      setEditedBody(editorRef.current.innerHTML);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[800] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
@@ -178,11 +189,67 @@ const EmailDraftModal: React.FC<{
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest italic mb-2 block">Message Payload</label>
-              <textarea 
-                value={editedBody}
-                onChange={(e) => setEditedBody(e.target.value)}
-                className="w-full h-64 bg-zinc-50 border border-zinc-100 rounded-2xl p-6 text-[12px] font-medium text-zinc-700 leading-relaxed outline-none focus:border-[#E31B23] focus:bg-white transition-all resize-none italic shadow-inner custom-scrollbar"
+              
+              {/* Rich Text Toolbar */}
+              <div className="flex items-center gap-2 mb-2 p-2 bg-zinc-50 border border-zinc-100 rounded-xl">
+                <button 
+                  type="button"
+                  onClick={() => execCommand('bold')}
+                  className="p-2 hover:bg-zinc-200 rounded-lg transition-colors"
+                  title="Bold"
+                >
+                  <span className="font-bold text-xs">B</span>
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => execCommand('italic')}
+                  className="p-2 hover:bg-zinc-200 rounded-lg transition-colors"
+                  title="Italic"
+                >
+                  <span className="italic text-xs">I</span>
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => execCommand('insertUnorderedList')}
+                  className="p-2 hover:bg-zinc-200 rounded-lg transition-colors"
+                  title="Bullet List"
+                >
+                  <span className="text-xs">• List</span>
+                </button>
+              </div>
+
+              <div 
+                ref={editorRef}
+                contentEditable
+                onInput={(e) => setEditedBody(e.currentTarget.innerHTML)}
+                dangerouslySetInnerHTML={{ __html: draft.body.replace(/\n/g, '<br>') }}
+                className="w-full h-64 bg-zinc-50 border border-zinc-100 rounded-2xl p-6 text-[12px] font-medium text-zinc-700 leading-relaxed outline-none focus:border-[#E31B23] focus:bg-white transition-all overflow-y-auto italic shadow-inner custom-scrollbar"
               />
+            </div>
+
+            {/* Send Later Option */}
+            <div className="pt-4 border-t border-zinc-50 space-y-4">
+              <div className="flex items-center gap-3">
+                <button 
+                  type="button"
+                  onClick={() => setSendLater(!sendLater)}
+                  className={`w-10 h-5 rounded-full relative transition-colors ${sendLater ? 'bg-[#E31B23]' : 'bg-zinc-200'}`}
+                >
+                  <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${sendLater ? 'left-6' : 'left-1'}`} />
+                </button>
+                <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest italic">Schedule Dispatch (Send Later)</span>
+              </div>
+              
+              {sendLater && (
+                <div className="animate-in slide-in-from-top-2 duration-300">
+                  <input 
+                    type="datetime-local"
+                    value={sendLaterAt}
+                    onChange={(e) => setSendLaterAt(e.target.value)}
+                    className="w-full bg-zinc-50 border border-zinc-100 rounded-xl px-4 py-3 text-xs font-bold text-black outline-none focus:border-black"
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -190,11 +257,16 @@ const EmailDraftModal: React.FC<{
         <div className="p-8 bg-zinc-50 border-t border-zinc-100 flex gap-4 justify-end">
            <Button variant="outline" onClick={onClose} className="h-14 px-8 text-[10px] rounded-2xl font-black italic">CANCEL</Button>
            <Button 
-             onClick={() => onSend({ ...draft, subject: editedSubject, body: editedBody })} 
-             disabled={isSending}
+             onClick={() => onSend({ 
+               ...draft, 
+               subject: editedSubject, 
+               body: editedBody,
+               sendLaterAt: sendLater ? sendLaterAt : undefined
+             })} 
+             disabled={isSending || (sendLater && !sendLaterAt)}
              className="h-14 px-12 text-[10px] shadow-2xl rounded-2xl bg-black hover:bg-zinc-800 font-black italic"
            >
-             {isSending ? <Loader2 size={18} className="animate-spin" /> : 'DISPATCH ADVISORY'}
+             {isSending ? <Loader2 size={18} className="animate-spin" /> : (sendLater ? 'SCHEDULE DISPATCH' : 'DISPATCH ADVISORY')}
            </Button>
         </div>
       </Card>
@@ -296,10 +368,11 @@ const BatchProcessModal: React.FC<{
 
 interface ManagementDashboardProps {
   onLogout: () => void;
+  activeTab: 'overview' | 'reports' | 'staff' | 'compliance' | 'users';
+  onTabChange: (tab: 'overview' | 'reports' | 'staff' | 'compliance' | 'users') => void;
 }
 
-const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) => {
-  const [activeView, setActiveView] = useState<'overview' | 'reports' | 'staff' | 'compliance'>('overview');
+const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout, activeTab, onTabChange }) => {
   const [isIntervening, setIsIntervening] = useState(false);
   const [isRecruiting, setIsRecruiting] = useState(false);
   const [showRecruitModal, setShowRecruitModal] = useState(false);
@@ -315,18 +388,21 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
   const [handshakeLogs, setHandshakeLogs] = useState<string[]>(["Management System Ready.", "System Stable."]);
 
   const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [staffData, statsData, auditLogs] = await Promise.all([
+        const [staffData, statsData, auditLogs, usersData] = await Promise.all([
           aimsApi.staff.getAll(),
           aimsApi.system.getStats(),
-          aimsApi.system.getAuditLogs()
+          aimsApi.system.getAuditLogs(),
+          aimsApi.system.getUsers()
         ]);
         setStaff(staffData);
         setStats(statsData);
+        setUsers(usersData);
         const formattedLogs = auditLogs.slice(0, 20).map((log: any) => 
           `${log.action}: ${JSON.stringify(log.details)}`
         );
@@ -479,7 +555,8 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
 
   const handleIntervention = async (draft: EmailDraft) => {
     setIsIntervening(true);
-    setHandshakeLogs(prev => [...prev, `Encrypting advisory for ${draft.to}...`, "Pushing via SMTP cluster..."]);
+    const logPrefix = draft.sendLaterAt ? `Scheduling advisory for ${draft.to} at ${draft.sendLaterAt}...` : `Encrypting advisory for ${draft.to}...`;
+    setHandshakeLogs(prev => [...prev, logPrefix, "Pushing via SMTP cluster..."]);
     
     try {
       const res = await fetch(`/api/staff/${draft.staffId}/interventions`, {
@@ -487,7 +564,8 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: draft.subject.includes('AUDIT') ? 'Compliance Audit' : 'Performance Email',
-          subject: draft.subject
+          subject: draft.subject,
+          scheduledAt: draft.sendLaterAt
         })
       });
 
@@ -497,7 +575,8 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
           ...s, 
           interventions: [intervention, ...s.interventions] 
         } : s));
-        setHandshakeLogs(prev => [...prev, `Advisory ${draft.subject} successfully dispatched.`]);
+        const successMsg = draft.sendLaterAt ? `Advisory ${draft.subject} successfully scheduled.` : `Advisory ${draft.subject} successfully dispatched.`;
+        setHandshakeLogs(prev => [...prev, successMsg]);
       }
     } catch (e) {
       console.error("Failed to send intervention", e);
@@ -519,25 +598,29 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
       {/* Leadership Header */}
       <div className="bg-black px-6 md:px-10 py-10 md:py-14 text-white border-b-8 border-[#E31B23] relative overflow-hidden">
         <div className="absolute top-0 right-0 p-12 opacity-5 pointer-events-none rotate-6"><BarChart3 size={320} /></div>
-        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end gap-10 relative z-10">
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-10 relative z-10">
           <div className="space-y-4">
-            <p className="text-[9px] font-bold text-[#E31B23] uppercase tracking-[0.4em] italic leading-none">MANAGEMENT COMMAND</p>
-            <h1 className="text-4xl md:text-6xl font-black tracking-tight uppercase italic leading-none text-white">Executive Hub</h1>
-            <div className="flex items-center gap-6">
-              <button 
-                onClick={checkDatabaseIntegrity} 
-                disabled={isCheckingDatabase}
-                className={`flex items-center gap-3 px-4 py-2 rounded-xl border transition-all ${dbStatus === 'nominal' ? 'bg-green-500/10 border-green-500/20 text-green-500' : 'bg-red-500/10 border-red-500/20 text-[#E31B23]'}`}
-              >
-                {isCheckingDatabase ? <RefreshCcw size={14} className="animate-spin" /> : <Database size={14} />}
-                <span className="text-[9px] font-black uppercase tracking-widest">{isCheckingDatabase ? 'SCANNING DATABASE...' : 'SYSTEM INTEGRITY: NOMINAL'}</span>
-              </button>
+            <div className="flex items-center gap-2">
+              <p className="text-[9px] font-black text-[#E31B23] uppercase tracking-[0.4em] italic leading-none">AIMS COMMAND</p>
+              <ChevronRight size={10} className="text-zinc-600" />
+              <p className="text-[9px] font-black text-white uppercase tracking-[0.4em] italic leading-none">
+                {activeTab === 'overview' ? 'EXECUTIVE DECK' : 
+                 activeTab === 'reports' ? 'ANALYTICS ENGINE' : 
+                 activeTab === 'staff' ? 'TEAM REGISTRY' : 
+                 activeTab === 'compliance' ? 'COMPLIANCE CONTROL' : 'USER DIRECTORY'}
+              </p>
             </div>
+            <h1 className="text-4xl md:text-5xl font-black tracking-tight uppercase italic leading-none text-white">
+              {activeTab === 'overview' ? 'Executive Hub' : 
+               activeTab === 'reports' ? 'Reports & Data' : 
+               activeTab === 'staff' ? 'Staff Audit' : 
+               activeTab === 'compliance' ? 'Compliance' : 'User Registry'}
+            </h1>
           </div>
           <div className="flex items-center gap-6 w-full lg:w-auto">
-            <div className="flex bg-zinc-900 p-1.5 rounded-2xl border border-white/5 shadow-2xl flex-1 lg:flex-none overflow-x-auto no-scrollbar">
-              {['overview', 'reports', 'staff', 'compliance'].map(tab => (
-                <button key={tab} onClick={() => setActiveView(tab as any)} className={`flex-1 lg:flex-none px-6 md:px-10 py-3 text-[10px] font-bold uppercase tracking-widest transition-all rounded-xl whitespace-nowrap ${activeView === tab ? 'bg-[#E31B23] text-white shadow-lg shadow-red-900/20' : 'text-zinc-500 hover:text-white'}`}>
+            <div className="flex bg-zinc-900/50 backdrop-blur-md p-1.5 rounded-2xl border border-white/5 shadow-2xl flex-1 lg:flex-none overflow-x-auto no-scrollbar">
+              {['overview', 'reports', 'staff', 'compliance', 'users'].map(tab => (
+                <button key={tab} onClick={() => onTabChange(tab as any)} className={`flex-1 lg:flex-none px-6 md:px-8 py-3 text-[10px] font-black uppercase tracking-widest transition-all rounded-xl whitespace-nowrap ${activeTab === tab ? 'bg-[#E31B23] text-white shadow-lg shadow-red-900/20' : 'text-zinc-500 hover:text-white'}`}>
                   {tab === 'staff' ? 'Team' : tab}
                 </button>
               ))}
@@ -574,74 +657,78 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
           />
         )}
 
-        {activeView === 'overview' && (
+        {activeTab === 'overview' && (
           <div className="space-y-10 md:space-y-14 animate-in fade-in duration-500">
             {/* Quick Stats */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {[
-                { label: 'Network Operations', val: stats?.totalClaims || '...', icon: <Activity size={20}/>, color: 'text-blue-500' },
-                { label: 'Avg Payout Cycle', val: '8.4 DAYS', icon: <Timer size={20}/>, color: 'text-[#E31B23]' },
-                { label: 'Settlement Liquidity', val: stats ? `$${(stats.totalPayout / 1000000).toFixed(2)}M` : '...', icon: <DollarSign size={20}/>, color: 'text-green-500' },
-                { label: 'Compliance Rating', val: `${complianceScore}%`, icon: <ShieldCheck size={20}/>, color: 'text-zinc-400' },
+                { label: 'Operations', val: stats?.totalClaims || '...', icon: <Activity size={18}/>, color: 'text-blue-500' },
+                { label: 'Cycle Time', val: '8.4 DAYS', icon: <Timer size={18}/>, color: 'text-[#E31B23]' },
+                { label: 'Liquidity', val: stats ? `$${(stats.totalPayout / 1000000).toFixed(1)}M` : '...', icon: <DollarSign size={18}/>, color: 'text-green-500' },
+                { label: 'Compliance', val: `${complianceScore}%`, icon: <ShieldCheck size={18}/>, color: 'text-zinc-400' },
               ].map((stat, i) => (
-                <Card key={i} className="p-8 border-none shadow-xl bg-white rounded-[32px] flex flex-col justify-between hover:scale-[1.02] transition-all group">
-                  <div className={`w-14 h-14 bg-slate-50 rounded-2xl flex items-center justify-center ${stat.color} mb-8 shadow-inner group-hover:bg-black transition-colors`}>{stat.icon}</div>
+                <Card key={i} className="p-6 border-none shadow-lg bg-white rounded-3xl flex flex-col justify-between hover:shadow-xl transition-all">
+                  <div className={`w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center ${stat.color} mb-6 shadow-inner`}>{stat.icon}</div>
                   <div className="space-y-1">
-                    <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest">{stat.label}</p>
-                    <p className="text-3xl font-black text-black italic uppercase tracking-tight">{stat.val}</p>
+                    <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">{stat.label}</p>
+                    <p className="text-2xl font-black text-black italic uppercase tracking-tight">{stat.val}</p>
                   </div>
                 </Card>
               ))}
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-              <Card className="lg:col-span-8 p-10 bg-white border-none shadow-xl rounded-[48px] flex items-center justify-between relative overflow-hidden group">
-                <div className="absolute top-0 right-0 p-12 opacity-5 pointer-events-none group-hover:scale-105 transition-all duration-1000"><Shield size={200} /></div>
-                <div className="relative z-10 flex flex-col justify-between h-full space-y-10">
-                  <div className="space-y-2">
-                    <p className="text-[9px] font-bold text-[#E31B23] uppercase tracking-widest italic leading-none">AIMS PORTFOLIO</p>
-                    <h3 className="text-2xl font-black text-black uppercase tracking-tight italic">Active Customer Policies</h3>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              <Card className="lg:col-span-8 p-8 bg-white border-none shadow-lg rounded-[40px] flex items-center justify-between relative overflow-hidden group">
+                <div className="absolute top-0 right-0 p-12 opacity-5 pointer-events-none group-hover:scale-105 transition-all duration-1000"><Shield size={160} /></div>
+                <div className="relative z-10 flex flex-col justify-between h-full space-y-8">
+                  <div className="space-y-1">
+                    <p className="text-[8px] font-black text-[#E31B23] uppercase tracking-widest italic leading-none">AIMS PORTFOLIO</p>
+                    <h3 className="text-xl font-black text-black uppercase tracking-tight italic">Active Customer Policies</h3>
                   </div>
                   <div>
-                    <p className="text-7xl md:text-8xl font-black text-black italic tracking-tighter leading-none">12,840</p>
+                    <p className="text-6xl md:text-7xl font-black text-black italic tracking-tighter leading-none">12,840</p>
                   </div>
                 </div>
               </Card>
 
-              <Card className="lg:col-span-4 p-10 bg-[#812323] text-white border-none shadow-2xl rounded-[48px] flex flex-col justify-center relative overflow-hidden group">
-                 <div className="relative z-10 space-y-6">
+              <Card className="lg:col-span-4 p-8 bg-[#812323] text-white border-none shadow-xl rounded-[40px] flex flex-col justify-center relative overflow-hidden group">
+                 <div className="relative z-10 space-y-4">
                    <div>
-                     <p className="text-[10px] font-black text-white/40 uppercase tracking-widest italic mb-2">RENEWALS REQUIRED</p>
-                     <h3 className="text-2xl font-black uppercase italic tracking-tight leading-none text-white">Expiring Node List</h3>
+                     <p className="text-[9px] font-black text-white/40 uppercase tracking-widest italic mb-1">RENEWALS REQUIRED</p>
+                     <h3 className="text-xl font-black uppercase italic tracking-tight leading-none text-white">Expiring Node List</h3>
                    </div>
-                   <p className="text-7xl font-black italic tracking-tighter leading-none text-white">412</p>
+                   <p className="text-6xl font-black italic tracking-tighter leading-none text-white">412</p>
                    <Button 
                     onClick={sendRenewalReminders} 
                     disabled={isSendingReminders}
-                    className={`w-full h-16 text-white text-[10px] font-black rounded-2xl shadow-xl uppercase transition-all ${isSendingReminders ? 'bg-zinc-800' : 'bg-white/10 border-white/20 hover:bg-white hover:text-black'}`}
-                   >
-                     {isSendingReminders ? `SENDING (${reminderProgress}%)` : 'SEND BATCH REMINDERS'}
-                   </Button>
+                    className={`w-full h-14 text-white text-[9px] font-black rounded-2xl shadow-xl uppercase transition-all ${isSendingReminders ? 'bg-zinc-800' : 'bg-white/10 border-white/20 hover:bg-white hover:text-black'}`}
+                  >
+                    {isSendingReminders ? <Loader2 size={16} className="animate-spin" /> : 'TRIGGER BATCH DISPATCH'}
+                  </Button>
                  </div>
               </Card>
             </div>
 
             {/* Telemetry Console */}
-            <Card className="p-10 bg-zinc-950 text-white rounded-[40px] border-none shadow-2xl space-y-8 h-[300px] flex flex-col">
+            <Card className="p-8 bg-zinc-950 text-white rounded-[40px] border-none shadow-2xl space-y-6 h-[280px] flex flex-col">
               <div className="flex justify-between items-center">
-                <h3 className="text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-4 italic text-zinc-400">
-                  <Zap size={18} className="text-[#E31B23]" /> System Integrity Handshake Feed
-                </h3>
-                {isCheckingDatabase && <Loader2 size={16} className="animate-spin text-zinc-600" />}
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center text-[#E31B23] border border-white/5"><Zap size={18} /></div>
+                  <div>
+                    <h3 className="text-[10px] font-black uppercase tracking-widest italic text-zinc-400">System Handshake Feed</h3>
+                    <p className="text-[8px] font-bold text-zinc-600 uppercase tracking-widest">Real-time ledger events</p>
+                  </div>
+                </div>
+                {isCheckingDatabase && <Loader2 size={14} className="animate-spin text-zinc-600" />}
               </div>
-              <div className="flex-1 overflow-hidden">
+              <div className="flex-1 overflow-hidden bg-black/40 rounded-2xl border border-white/5 p-4">
                 <NeuralFeed logs={handshakeLogs} />
               </div>
             </Card>
           </div>
         )}
 
-        {activeView === 'reports' && (
+        {activeTab === 'reports' && (
           <div className="space-y-10 animate-in fade-in duration-500">
              <div className="space-y-2">
                 <h2 className="text-3xl font-black uppercase italic text-black leading-none">Reporting Deck</h2>
@@ -673,7 +760,7 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
           </div>
         )}
 
-        {activeView === 'staff' && (
+        {activeTab === 'staff' && (
           <div className="animate-in slide-in-from-bottom-4 space-y-10">
              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 px-1">
                <div className="space-y-2">
@@ -740,7 +827,7 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
           </div>
         )}
 
-        {activeView === 'compliance' && (
+        {activeTab === 'compliance' && (
           <div className="space-y-10 animate-in fade-in duration-500">
              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 px-1">
                <div className="space-y-2">
@@ -822,6 +909,65 @@ const ManagementDashboard: React.FC<ManagementDashboardProps> = ({ onLogout }) =
                                  <ShieldCheck size={14} /> NOMINAL
                                </span>
                              )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+             </Card>
+          </div>
+        )}
+        {activeTab === 'users' && (
+          <div className="animate-in slide-in-from-bottom-4 space-y-10">
+             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 px-1">
+               <div className="space-y-2">
+                 <h2 className="text-3xl font-black uppercase italic text-black leading-none">Registered Users</h2>
+                 <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest italic">AIMS Customer Registry</p>
+               </div>
+             </div>
+
+             <Card className="overflow-hidden border-none shadow-xl rounded-[40px] bg-white">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className="bg-slate-50 border-b border-slate-100">
+                      <tr className="text-[10px] font-black text-zinc-400 uppercase tracking-[0.2em]">
+                        <th className="px-10 py-6">USER IDENTITY</th>
+                        <th className="px-10 py-6">ROLE</th>
+                        <th className="px-10 py-6">PHONE</th>
+                        <th className="px-10 py-6">STATUS</th>
+                        <th className="px-10 py-6">JOINED</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {users.map(user => (
+                        <tr key={user.id} className="hover:bg-slate-50/50 transition-all group">
+                          <td className="px-10 py-8">
+                            <div className="flex items-center gap-5">
+                              <div className="w-12 h-12 rounded-xl bg-black text-white flex items-center justify-center font-black italic text-xs shadow-md">
+                                {user.full_name?.charAt(0) || 'U'}
+                              </div>
+                              <div>
+                                <p className="text-base font-black text-black uppercase italic leading-none">{user.full_name}</p>
+                                <p className="text-[10px] font-bold text-zinc-400 mt-2 uppercase tracking-widest">{user.email}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-10 py-8 text-xs font-black text-zinc-500 uppercase italic">
+                            <Badge className="border-none bg-zinc-50 text-zinc-400">{user.role}</Badge>
+                          </td>
+                          <td className="px-10 py-8 text-xs font-bold text-zinc-500">
+                            {user.phone || 'N/A'}
+                          </td>
+                          <td className="px-10 py-8">
+                            {user.verified ? (
+                              <Badge className="bg-green-50 text-green-600 border-green-100">VERIFIED</Badge>
+                            ) : (
+                              <Badge className="bg-amber-50 text-amber-600 border-amber-100">PENDING</Badge>
+                            )}
+                          </td>
+                          <td className="px-10 py-8 text-xs font-bold text-zinc-400 italic">
+                            {new Date(user.created_at).toLocaleDateString()}
                           </td>
                         </tr>
                       ))}

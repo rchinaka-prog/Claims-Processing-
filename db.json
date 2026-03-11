@@ -6,7 +6,7 @@
       "car": "MERCEDES GLC",
       "vehicle": "MERCEDES GLC (ABC-123)",
       "owner": "JOHN DOE",
-      "priority": "URGENT",
+      "priority": "CRITICAL",
       "status": "PENDING_INSPECTION",
       "time": "10:00 AM",
       "distance": "1.2km",
@@ -17,7 +17,7 @@
       "phone": "0786413281",
       "email": "j.doe@firstmutual.co.zw",
       "historyScore": "4.8/5.0",
-      "assignedTo": "assessor@firstmutual.co.zw",
+      "assignedAssessor": "assessor@aims.com",
       "amount": "$1,200",
       "coverage": 1200,
       "slaStatus": "ON_TRACK",
@@ -27,7 +27,8 @@
       "repairer": "City Auto Elite",
       "insurancePaid": false,
       "progress": 0,
-      "submittedAt": "2026-02-22T10:00:00Z"
+      "submittedAt": "2026-02-22T10:00:00Z",
+      "dueDate": "2026-03-10T17:00:00Z"
     },
     {
       "id": "CLM-1022",
@@ -35,7 +36,7 @@
       "car": "TOYOTA RAV4",
       "vehicle": "TOYOTA RAV4 (ZBW-110)",
       "owner": "MARY W.",
-      "priority": "STANDARD",
+      "priority": "MEDIUM",
       "status": "PENDING_INSPECTION",
       "time": "11:30 AM",
       "distance": "4.8km",
@@ -46,7 +47,7 @@
       "phone": "0786413281",
       "email": "mary.w@firstmutual.co.zw",
       "historyScore": "5.0/5.0",
-      "assignedTo": "assessor@firstmutual.co.zw",
+      "assignedAssessor": "assessor@aims.com",
       "amount": "$850",
       "coverage": 850,
       "slaStatus": "ON_TRACK",
@@ -56,7 +57,8 @@
       "repairer": "Westside Bodywork",
       "insurancePaid": false,
       "progress": 0,
-      "submittedAt": "2026-02-22T22:30:00Z"
+      "submittedAt": "2026-02-22T22:30:00Z",
+      "dueDate": "2026-03-12T17:00:00Z"
     },
     {
       "id": "CLM-1023",
@@ -64,7 +66,7 @@
       "car": "VW GOLF 7",
       "vehicle": "VW GOLF 7 (VW-777)",
       "owner": "PETER S.",
-      "priority": "LOW",
+      "priority": "CRITICAL",
       "status": "AWAITING_DOCS",
       "time": "02:00 PM",
       "distance": "12.5km",
@@ -85,7 +87,8 @@
       "repairer": "Central Motors",
       "insurancePaid": false,
       "progress": 0,
-      "submittedAt": "2026-02-22T14:00:00Z"
+      "submittedAt": "2026-02-22T14:00:00Z",
+      "dueDate": "2026-03-15T17:00:00Z"
     }
   ]
 }

@@ -1,10 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
-import { X, Bell, Info, AlertCircle, CheckCircle, UserCheck, ShieldAlert, CreditCard, Lock, Loader2, ShieldCheck, Zap, QrCode, Smartphone, MessageCircle, Terminal, Activity } from 'lucide-react';
-import { loadStripe } from '@stripe/stripe-js';
-
-// Initialize Stripe with the publishable key from environment variables
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '');
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Bell, Info, AlertCircle, CheckCircle, UserCheck, ShieldAlert, CreditCard, Lock, Loader2, ShieldCheck, Zap, QrCode, Smartphone, MessageCircle, Terminal, Activity, ExternalLink } from 'lucide-react';
 
 // Notification interface definition for system alerts and tracking
 export interface Notification {
@@ -84,43 +80,37 @@ export const PaymentBridge: React.FC<{
   onCancel: () => void,
   title?: string 
 }> = ({ amount, to, claimId, customerName, onSuccess, onCancel, title = "Secure Payment" }) => {
-  const [step, setStep] = useState<'init' | 'processing' | 'error' | 'success'>('init');
+  const [step, setStep] = useState<'init' | 'processing' | 'awaiting_payment' | 'error' | 'success'>('init');
   const [error, setError] = useState<string | null>(null);
+  const [pollUrl, setPollUrl] = useState<string | null>(null);
+  const [redirectUrl, setRedirectUrl] = useState<string | null>(null);
+  const pollIntervalRef = useRef<any>(null);
+
+  const numericAmount = parseFloat(amount.replace(/[^0-9.]/g, ''));
 
   useEffect(() => {
-    // Check for success/cancel in URL
-    const params = new URLSearchParams(window.location.search);
-    const paymentStatus = params.get('payment');
-    const returnedClaimId = params.get('claimId');
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, []);
 
-    if (paymentStatus === 'success' && returnedClaimId === claimId) {
-      setStep('success');
-      // Clean up URL
-      window.history.replaceState({}, document.title, window.location.pathname);
-      setTimeout(() => onSuccess(), 2000);
-    } else if (paymentStatus === 'cancel' && returnedClaimId === claimId) {
-      setError("Payment was cancelled by user.");
-      setStep('error');
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-  }, [claimId, onSuccess]);
-
-  const handleStripePayment = async () => {
+  const initiatePayment = async () => {
     setStep('processing');
     try {
-      const numericAmount = parseFloat(amount.replace(/[^0-9.]/g, ''));
-      const res = await fetch('/api/stripe/create-checkout-session', {
+      const res = await fetch('/api/payment/initiate-paynow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: numericAmount, claimId, customerName })
+        body: JSON.stringify({ amount: numericAmount, claimId, email: 'customer@aims.com' }) // In real app, use user's email
       });
-      const session = await res.json();
+      const data = await res.json();
       
-      if (session.url) {
-        // Redirect to Stripe Checkout
-        window.location.href = session.url;
+      if (data.success) {
+        setPollUrl(data.pollUrl);
+        setRedirectUrl(data.redirectUrl);
+        setStep('awaiting_payment');
+        startPolling(data.pollUrl);
       } else {
-        throw new Error(session.error || "Failed to create Stripe session");
+        throw new Error(data.error || "Failed to initiate Paynow session");
       }
     } catch (e: any) {
       setError(e.message);
@@ -128,13 +118,40 @@ export const PaymentBridge: React.FC<{
     }
   };
 
+  const startPolling = (url: string) => {
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    
+    pollIntervalRef.current = setInterval(async () => {
+      try {
+        const res = await fetch('/api/payment/check-paynow-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pollUrl: url, claimId })
+        });
+        const result = await res.json();
+        
+        if (result.status === 'COMPLETED') {
+          clearInterval(pollIntervalRef.current);
+          setStep('success');
+          setTimeout(() => onSuccess(), 2000);
+        } else if (result.status === 'Cancelled' || result.status === 'Disputed' || result.status === 'Refunded') {
+          clearInterval(pollIntervalRef.current);
+          setError(`Payment status: ${result.status}`);
+          setStep('error');
+        }
+      } catch (e) {
+        console.error("Polling error:", e);
+      }
+    }, 5000);
+  };
+
   return (
     <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 sm:p-6 bg-slate-900/95 backdrop-blur-xl animate-in fade-in duration-300">
-      <Card className="w-full max-w-md p-0 overflow-hidden border-none shadow-[0_0_100px_rgba(99,102,241,0.2)] bg-white rounded-[32px]">
-        <div className="bg-[#635bff] p-8 text-white flex justify-between items-center">
+      <Card className="w-full max-w-md p-0 overflow-hidden border-none shadow-[0_0_100px_rgba(227,27,35,0.2)] bg-white rounded-[32px]">
+        <div className="bg-[#E31B23] p-8 text-white flex justify-between items-center">
           <div className="flex items-center gap-2">
             <Lock size={18} />
-            <span className="text-xs font-black uppercase tracking-widest">Stripe Secure Gateway</span>
+            <span className="text-xs font-black uppercase tracking-widest">Paynow Secure Gateway</span>
           </div>
           <button onClick={onCancel} className="p-1 hover:bg-white/10 rounded-full"><X size={24}/></button>
         </div>
@@ -149,19 +166,19 @@ export const PaymentBridge: React.FC<{
 
               <div className="bg-slate-50 p-8 rounded-3xl border border-slate-100 flex flex-col items-center">
                 <p className="text-xs font-black text-slate-400 uppercase tracking-[0.3em] mb-3">Settlement Amount</p>
-                <p className="text-5xl sm:text-6xl font-black text-[#635bff] tracking-tighter italic">{amount}</p>
+                <p className="text-5xl sm:text-6xl font-black text-[#E31B23] tracking-tighter italic">{amount}</p>
               </div>
 
               <div className="space-y-6">
                 <Button 
-                  onClick={handleStripePayment}
-                  className="w-full h-16 bg-[#635bff] hover:bg-[#5851e0] text-white rounded-2xl flex items-center justify-center gap-3 shadow-xl shadow-indigo-200 group"
+                  onClick={initiatePayment}
+                  className="w-full h-16 bg-[#E31B23] hover:bg-red-700 text-white rounded-2xl flex items-center justify-center gap-3 shadow-xl shadow-red-200 group"
                 >
                   <CreditCard size={20} className="group-hover:scale-110 transition-transform" />
-                  <span>Pay with Stripe</span>
+                  <span>Pay with Paynow</span>
                 </Button>
                 <p className="text-[9px] text-center font-bold text-slate-400 uppercase tracking-widest">
-                  Powered by Stripe • PCI DSS Compliant
+                  Powered by Paynow • Local & International Payments
                 </p>
               </div>
             </div>
@@ -170,12 +187,43 @@ export const PaymentBridge: React.FC<{
           {step === 'processing' && (
             <div className="py-20 flex flex-col items-center text-center space-y-10 animate-in zoom-in-95">
               <div className="relative">
-                <div className="absolute inset-0 bg-[#635bff] blur-2xl opacity-20 animate-pulse" />
-                <Loader2 size={72} className="text-[#635bff] animate-spin relative z-10" />
+                <div className="absolute inset-0 bg-[#E31B23] blur-2xl opacity-20 animate-pulse" />
+                <Loader2 size={72} className="text-[#E31B23] animate-spin relative z-10" />
               </div>
               <div>
                 <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Handshake Processing</h3>
-                <p className="text-xs font-black text-slate-400 uppercase tracking-widest mt-3">Redirecting to Stripe Gateway...</p>
+                <p className="text-xs font-black text-slate-400 uppercase tracking-widest mt-3">Connecting to Paynow Gateway...</p>
+              </div>
+            </div>
+          )}
+
+          {step === 'awaiting_payment' && (
+            <div className="py-10 flex flex-col items-center text-center space-y-8 animate-in zoom-in-95">
+              <div className="w-20 h-20 bg-amber-50 text-amber-500 rounded-full flex items-center justify-center shadow-inner border-2 border-amber-100 animate-pulse">
+                <Smartphone size={40} />
+              </div>
+              <div className="space-y-4">
+                <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Awaiting Payment</h3>
+                <p className="text-xs font-medium text-slate-500 italic leading-relaxed">
+                  Please complete the payment on the Paynow secure page. We are monitoring the transaction status.
+                </p>
+              </div>
+              
+              {redirectUrl && (
+                <a 
+                  href={redirectUrl} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="w-full h-14 bg-black text-white rounded-2xl flex items-center justify-center gap-3 shadow-lg hover:bg-zinc-800 transition-all"
+                >
+                  <ExternalLink size={18} />
+                  <span className="text-xs font-black uppercase tracking-widest">Open Payment Page</span>
+                </a>
+              )}
+
+              <div className="flex items-center gap-2 text-[10px] font-black text-zinc-400 uppercase tracking-widest">
+                <Loader2 size={12} className="animate-spin" />
+                <span>Polling for status...</span>
               </div>
             </div>
           )}
@@ -207,8 +255,8 @@ export const PaymentBridge: React.FC<{
         </div>
 
         <div className="bg-slate-50 p-6 flex items-center justify-center gap-3">
-          <Zap size={16} className="text-[#635bff]" />
-          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Secure Handshake v3.0 • Stripe Verified</span>
+          <Zap size={16} className="text-[#E31B23]" />
+          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Secure Handshake v3.0 • Paynow Verified</span>
         </div>
       </Card>
     </div>
@@ -251,8 +299,8 @@ export const Button: React.FC<ButtonProps> = ({
   );
 };
 
-export const Card: React.FC<{ children: React.ReactNode, className?: string }> = ({ children, className = '' }) => (
-  <div className={`bg-white rounded-none border border-slate-200 shadow-sm overflow-hidden ${className}`}>
+export const Card: React.FC<{ children: React.ReactNode, className?: string, onClick?: () => void }> = ({ children, className = '', onClick }) => (
+  <div onClick={onClick} className={`bg-white rounded-none border border-slate-200 shadow-sm overflow-hidden ${className}`}>
     {children}
   </div>
 );

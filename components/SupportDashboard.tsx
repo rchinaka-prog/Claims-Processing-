@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Card, Button, Badge, PaymentBridge } from './Shared';
 import LiveChat from './LiveChat';
 import { aimsApi } from '../src/services/aimsApi';
+import { GoogleGenAI } from "@google/genai";
 import { 
   UserCog, Phone, X, AlertTriangle, 
   ChevronRight, Search, Filter, 
@@ -29,8 +30,8 @@ interface SupportClaim {
   customerPhone: string;
   vehicle: string;
   regNo: string;
-  status: 'Reviewing' | 'Approved' | 'Finished' | 'Stagnant' | 'Documents Pending' | 'Submitted' | 'Settled';
-  priority: 'HIGH' | 'MEDIUM' | 'LOW';
+  status: 'Reviewing' | 'Approved' | 'Finished' | 'Stagnant' | 'Documents Pending' | 'Submitted' | 'Settled' | 'Paid';
+  priority: 'CRITICAL' | 'MEDIUM';
   date: string;
   submittedAt: string; // ISO string for deadline tracking
   type: string;
@@ -50,6 +51,7 @@ interface SupportClaim {
   requestedAmount?: number;
   completionPhotos?: string[];
   notes?: ClaimNote[];
+  dueDate?: string;
 }
 
 interface StaffMessage {
@@ -72,12 +74,13 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [showPaymentBridge, setShowPaymentBridge] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [priorityFilter, setPriorityFilter] = useState<'ALL' | 'HIGH' | 'MEDIUM' | 'LOW'>('ALL');
+  const [priorityFilter, setPriorityFilter] = useState<'ALL' | 'CRITICAL' | 'MEDIUM'>('ALL');
   const [isAssigning, setIsAssigning] = useState(false);
   const [targetAssessorId, setTargetAssessorId] = useState('');
   const [newNoteText, setNewNoteText] = useState('');
   const [isNoteVisibleToRepairer, setIsNoteVisibleToRepairer] = useState(false);
   const [isSavingNote, setIsSavingNote] = useState(false);
+  const [isNeuralAuditing, setIsNeuralAuditing] = useState(false);
   
   const notifiedStagnantIds = useRef<Set<string>>(new Set());
   const lastKnownStatuses = useRef<Record<string, string>>({});
@@ -154,27 +157,31 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
   const handleAssignAssessor = async () => {
     if (!selectedClaimId || !targetAssessorId) return;
     setIsAssigning(true);
-    await new Promise(resolve => setTimeout(resolve, 1200));
-    const assessor = assessors.find(a => a.id === targetAssessorId);
     try {
-      await fetch(`/api/claims/${selectedClaimId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assignedAssessor: assessor?.name, status: 'Reviewing', progress: 40 })
+      const response = await fetch(`/api/claims/${selectedClaimId}/assign/${targetAssessorId}`, {
+        method: 'POST',
       });
 
-      setClaimsQueue(prev => prev.map(c => 
-        c.id === selectedClaimId ? { ...c, assignedAssessor: assessor?.name, status: 'Reviewing', progress: 40 } : c
-      ));
-      
-      addNotification({
-        id: `assign-${Date.now()}`,
-        title: "Assessor Assigned",
-        message: `${assessor?.name} has been assigned to claim ${selectedClaimId}.`,
-        type: 'success',
-        timestamp: new Date(),
-        isRead: false
-      });
+      if (response.ok) {
+        const updatedClaim = await response.json();
+        setClaimsQueue(prev => prev.map(c => 
+          c.id === selectedClaimId ? { 
+            ...c, 
+            assignedAssessor: updatedClaim.assignedAssessor, 
+            status: updatedClaim.status === 'PENDING_INSPECTION' ? 'Reviewing' : updatedClaim.status,
+            progress: updatedClaim.progress 
+          } : c
+        ));
+        
+        addNotification({
+          id: `assign-${Date.now()}`,
+          title: "Assessor Assigned",
+          message: `${updatedClaim.assignedAssessor} has been assigned to claim ${selectedClaimId}.`,
+          type: 'success',
+          timestamp: new Date(),
+          isRead: false
+        });
+      }
     } catch (error) {
       console.error("Failed to assign assessor:", error);
     }
@@ -252,23 +259,26 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
     if (!selectedClaimId || !selectedClaim) return;
     
     try {
+      const newStatus = selectedClaim.status === 'Settled' ? 'Paid' : 'Settled';
+      const isPaid = newStatus === 'Paid' || selectedClaim.insurancePaid;
+
       await fetch(`/api/claims/${selectedClaimId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          status: 'Settled',
-          insurancePaid: true
+          status: newStatus,
+          insurancePaid: isPaid
         })
       });
 
       setClaimsQueue(prev => prev.map(c => 
-        c.id === selectedClaimId ? { ...c, status: 'Settled', insurancePaid: true } : c
+        c.id === selectedClaimId ? { ...c, status: newStatus, insurancePaid: isPaid } : c
       ));
       
       addNotification({
         id: `payout-${Date.now()}`,
-        title: "Payout Processed",
-        message: `Claim ${selectedClaimId} has been settled.`,
+        title: newStatus === 'Paid' ? "Payout Completed" : "Payout Processed",
+        message: newStatus === 'Paid' ? `Claim ${selectedClaimId} has been fully paid.` : `Claim ${selectedClaimId} has been settled.`,
         type: 'success',
         timestamp: new Date(),
         isRead: false
@@ -314,16 +324,72 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
     }
   };
 
+  const runNeuralAudit = async () => {
+    if (!selectedClaimId || !selectedClaim) return;
+    setIsNeuralAuditing(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: `Analyze this insurance claim for risk and consistency. 
+        Claim: ${JSON.stringify(selectedClaim)}
+        Provide a 2-sentence expert summary focusing on financial risk and technical consistency.`,
+      });
+      
+      const auditResult = response.text || "Neural audit complete. No critical anomalies detected.";
+      
+      await fetch(`/api/claims/${selectedClaimId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assessorFindings: auditResult })
+      });
+
+      setClaimsQueue(prev => prev.map(c => 
+        c.id === selectedClaimId ? { ...c, assessorFindings: auditResult } : c
+      ));
+
+      addNotification({
+        id: `audit-${Date.now()}`,
+        title: "Neural Audit Complete",
+        message: "The claim has been analyzed by the Nicoz Diamond Neural Hub.",
+        type: 'success',
+        timestamp: new Date(),
+        isRead: false
+      });
+    } catch (error) {
+      console.error("Neural Audit Error:", error);
+    } finally {
+      setIsNeuralAuditing(false);
+    }
+  };
+
   if (activeTab === 'inbox') {
     return (
-      <div className="flex flex-col min-h-full bg-slate-50">
-        <div className="p-6 md:p-8 border-b border-slate-200 bg-white shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div className="space-y-1">
-            <h1 className="text-xl md:text-2xl font-bold text-black uppercase tracking-tight italic leading-none">Staff Inbox</h1>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Correspondence Node</p>
+      <div className="flex flex-col min-h-full bg-slate-50 p-6 md:p-10 space-y-8 md:space-y-12">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <p className="text-[9px] font-black text-[#E31B23] uppercase tracking-[0.4em] italic leading-none">AIMS SUPPORT</p>
+              <ChevronRight size={10} className="text-zinc-600" />
+              <p className="text-[9px] font-black text-zinc-400 uppercase tracking-[0.4em] italic leading-none">MESSAGE NODE</p>
+            </div>
+            <h1 className="text-4xl md:text-5xl font-black tracking-tight uppercase italic leading-none text-black">Staff Inbox</h1>
+          </div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
+            <div className="flex bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-xl overflow-x-auto no-scrollbar">
+              {['overview', 'claims', 'billing', 'policies', 'inbox'].map(tab => (
+                <button 
+                  key={tab} 
+                  onClick={() => onTabChange(tab as any)} 
+                  className={`px-6 md:px-8 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all whitespace-nowrap ${activeTab === tab ? 'bg-black text-white shadow-lg' : 'text-slate-400 hover:text-black'}`}
+                >
+                  {tab === 'overview' ? 'Home' : tab === 'claims' ? 'Claims' : tab === 'inbox' ? 'Inbox' : tab}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 max-w-5xl mx-auto w-full">
+        <div className="flex-1 overflow-y-auto max-w-5xl mx-auto w-full">
           <Card className="rounded-2xl md:rounded-3xl border-none shadow-xl overflow-hidden bg-white">
             <div className="divide-y divide-slate-100">
               {inboxMessages.map(msg => (
@@ -349,10 +415,29 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
 
   if (activeTab === 'billing') {
     return (
-      <div className="flex flex-col min-h-full bg-slate-50 p-4 md:p-10 space-y-6 md:space-y-10">
-        <div className="space-y-2 px-1">
-          <p className="text-[9px] font-bold text-[#E31B23] uppercase tracking-[0.3em] italic leading-none">FINANCIAL COMMAND</p>
-          <h2 className="text-2xl md:text-4xl font-bold text-black uppercase tracking-tight italic leading-none">Billing Center</h2>
+      <div className="flex flex-col min-h-full bg-slate-50 p-6 md:p-10 space-y-8 md:space-y-12">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <p className="text-[9px] font-black text-[#E31B23] uppercase tracking-[0.4em] italic leading-none">AIMS SUPPORT</p>
+              <ChevronRight size={10} className="text-zinc-600" />
+              <p className="text-[9px] font-black text-zinc-400 uppercase tracking-[0.4em] italic leading-none">FINANCIAL HUB</p>
+            </div>
+            <h1 className="text-4xl md:text-5xl font-black tracking-tight uppercase italic leading-none text-black">Billing Center</h1>
+          </div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
+            <div className="flex bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-xl overflow-x-auto no-scrollbar">
+              {['overview', 'claims', 'billing', 'policies', 'inbox'].map(tab => (
+                <button 
+                  key={tab} 
+                  onClick={() => onTabChange(tab as any)} 
+                  className={`px-6 md:px-8 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all whitespace-nowrap ${activeTab === tab ? 'bg-black text-white shadow-lg' : 'text-slate-400 hover:text-black'}`}
+                >
+                  {tab === 'overview' ? 'Home' : tab === 'claims' ? 'Claims' : tab === 'inbox' ? 'Inbox' : tab}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {[
@@ -372,7 +457,7 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
         <Card className="rounded-[32px] border-none shadow-xl bg-white p-6 md:p-10">
           <h3 className="text-lg font-bold text-black uppercase tracking-tight italic mb-8">Recent Ledger Entries</h3>
           <div className="space-y-4">
-            {claimsQueue.filter(c => c.insurancePaid || c.negotiationPending).map(c => (
+            {claimsQueue.filter(c => c.insurancePaid || c.negotiationPending || c.status === 'Settled' || c.status === 'Paid').map(c => (
               <div key={c.id} className="flex items-center justify-between p-6 bg-slate-50 border border-slate-100 rounded-2xl">
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 bg-black text-white rounded-lg flex items-center justify-center font-bold italic">{c.id.slice(0, 2)}</div>
@@ -383,7 +468,7 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-black text-black italic">{c.amount}</p>
-                  <Badge status={c.insurancePaid ? 'success' : 'critical'} className="mt-1 text-[7px] px-2 py-0.5 rounded-md uppercase">{c.insurancePaid ? 'DISBURSED' : 'PENDING'}</Badge>
+                  <Badge status={c.status === 'Paid' ? 'success' : c.status === 'Settled' ? 'warning' : 'critical'} className="mt-1 text-[7px] px-2 py-0.5 rounded-md uppercase">{c.status === 'Paid' ? 'DISBURSED' : c.status === 'Settled' ? 'READY FOR PAYOUT' : 'PENDING'}</Badge>
                 </div>
               </div>
             ))}
@@ -395,10 +480,29 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
 
   if (activeTab === 'policies') {
     return (
-      <div className="flex flex-col min-h-full bg-slate-50 p-4 md:p-10 space-y-6 md:space-y-10">
-        <div className="space-y-2 px-1">
-          <p className="text-[9px] font-bold text-[#E31B23] uppercase tracking-[0.3em] italic leading-none">REGULATORY HUB</p>
-          <h2 className="text-2xl md:text-4xl font-bold text-black uppercase tracking-tight italic leading-none">Policy Hub</h2>
+      <div className="flex flex-col min-h-full bg-slate-50 p-6 md:p-10 space-y-8 md:space-y-12">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <p className="text-[9px] font-black text-[#E31B23] uppercase tracking-[0.4em] italic leading-none">AIMS SUPPORT</p>
+              <ChevronRight size={10} className="text-zinc-600" />
+              <p className="text-[9px] font-black text-zinc-400 uppercase tracking-[0.4em] italic leading-none">REGULATORY VAULT</p>
+            </div>
+            <h1 className="text-4xl md:text-5xl font-black tracking-tight uppercase italic leading-none text-black">Policy Hub</h1>
+          </div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
+            <div className="flex bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-xl overflow-x-auto no-scrollbar">
+              {['overview', 'claims', 'billing', 'policies', 'inbox'].map(tab => (
+                <button 
+                  key={tab} 
+                  onClick={() => onTabChange(tab as any)} 
+                  className={`px-6 md:px-8 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all whitespace-nowrap ${activeTab === tab ? 'bg-black text-white shadow-lg' : 'text-slate-400 hover:text-black'}`}
+                >
+                  {tab === 'overview' ? 'Home' : tab === 'claims' ? 'Claims' : tab === 'inbox' ? 'Inbox' : tab}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
         <Card className="rounded-[32px] border-none shadow-xl bg-white p-6 md:p-10 space-y-8">
           <div className="flex bg-slate-50 border border-slate-200 rounded-2xl px-6 py-4 items-center gap-4 shadow-inner">
@@ -430,10 +534,29 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
   if (activeTab === 'claims') {
     // Claims Engine - Advanced list
     return (
-      <div className="flex flex-col min-h-full bg-slate-50 p-4 md:p-10 space-y-6 md:space-y-10">
-        <div className="space-y-2 px-1">
-          <p className="text-[9px] font-bold text-[#E31B23] uppercase tracking-[0.3em] italic leading-none">OPERATIONAL CORE</p>
-          <h2 className="text-2xl md:text-4xl font-bold text-black uppercase tracking-tight italic leading-none">Claims Engine</h2>
+      <div className="flex flex-col min-h-full bg-slate-50 p-6 md:p-10 space-y-8 md:space-y-12">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <p className="text-[9px] font-black text-[#E31B23] uppercase tracking-[0.4em] italic leading-none">AIMS SUPPORT</p>
+              <ChevronRight size={10} className="text-zinc-600" />
+              <p className="text-[9px] font-black text-zinc-400 uppercase tracking-[0.4em] italic leading-none">OPERATIONAL CORE</p>
+            </div>
+            <h1 className="text-4xl md:text-5xl font-black tracking-tight uppercase italic leading-none text-black">Claims Engine</h1>
+          </div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
+            <div className="flex bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-xl overflow-x-auto no-scrollbar">
+              {['overview', 'claims', 'billing', 'policies', 'inbox'].map(tab => (
+                <button 
+                  key={tab} 
+                  onClick={() => onTabChange(tab as any)} 
+                  className={`px-6 md:px-8 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all whitespace-nowrap ${activeTab === tab ? 'bg-black text-white shadow-lg' : 'text-slate-400 hover:text-black'}`}
+                >
+                  {tab === 'overview' ? 'Home' : tab === 'claims' ? 'Claims' : tab === 'inbox' ? 'Inbox' : tab}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
         <Card className="rounded-[32px] border-none shadow-xl bg-white p-6 md:p-10 space-y-8">
           <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
@@ -447,7 +570,7 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
               />
             </div>
             <div className="flex gap-2 w-full lg:w-auto overflow-x-auto no-scrollbar pb-2 lg:pb-0">
-              {['ALL', 'HIGH', 'MEDIUM', 'LOW'].map(p => (
+              {['ALL', 'CRITICAL', 'MEDIUM'].map(p => (
                 <button 
                   key={p} 
                   onClick={() => setPriorityFilter(p as any)}
@@ -468,6 +591,12 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
                   </div>
                   <h4 className="text-xl font-black text-black uppercase italic tracking-tight group-hover:text-[#E31B23] transition-colors">{c.vehicle}</h4>
                   <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{c.customer} • {c.type}</p>
+                  {c.dueDate && (
+                    <div className="flex items-center gap-2 mt-2 text-[9px] font-black text-black uppercase italic">
+                      <Calendar size={12} className="text-[#E31B23]" />
+                      Due: {new Date(c.dueDate).toLocaleDateString()}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-8 w-full sm:w-auto justify-between sm:justify-end">
                   <div className="text-right">
@@ -487,12 +616,41 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
   }
 
   return (
-    <div className="flex flex-col min-h-full bg-slate-50 p-4 md:p-10 space-y-6 md:space-y-10">
+    <div className="flex flex-col min-h-full bg-slate-50 p-6 md:p-10 space-y-8 md:space-y-12">
       {!selectedClaimId ? (
         <>
-          <div className="space-y-2 px-1">
-            <p className="text-[9px] font-bold text-[#E31B23] uppercase tracking-[0.3em] italic leading-none">ENTERPRISE COMMAND</p>
-            <h2 className="text-2xl md:text-4xl font-bold text-black uppercase tracking-tight italic leading-none">Greetings, {session.user.full_name.split(' ')[0]}</h2>
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <p className="text-[9px] font-black text-[#E31B23] uppercase tracking-[0.4em] italic leading-none">AIMS SUPPORT</p>
+                <ChevronRight size={10} className="text-zinc-600" />
+                <p className="text-[9px] font-black text-zinc-400 uppercase tracking-[0.4em] italic leading-none">
+                  {activeTab === 'main' ? 'COMMAND CENTER' : 
+                   activeTab === 'claims' ? 'OPERATIONAL CORE' : 
+                   activeTab === 'billing' ? 'FINANCIAL HUB' : 
+                   activeTab === 'policies' ? 'REGULATORY VAULT' : 'MESSAGE NODE'}
+                </p>
+              </div>
+              <h1 className="text-4xl md:text-5xl font-black tracking-tight uppercase italic leading-none text-black">
+                {activeTab === 'main' ? `Welcome, ${session.user.full_name.split(' ')[0]}` : 
+                 activeTab === 'claims' ? 'Claims Engine' : 
+                 activeTab === 'billing' ? 'Billing Hub' : 
+                 activeTab === 'policies' ? 'Policy Hub' : 'Staff Inbox'}
+              </h1>
+            </div>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
+              <div className="flex bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-xl overflow-x-auto no-scrollbar">
+                {['main', 'claims', 'billing', 'policies', 'inbox'].map(tab => (
+                  <button 
+                    key={tab} 
+                    onClick={() => onTabChange(tab as any)} 
+                    className={`px-6 md:px-8 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all whitespace-nowrap ${activeTab === tab ? 'bg-black text-white shadow-lg' : 'text-slate-400 hover:text-black'}`}
+                  >
+                    {tab === 'main' ? 'Home' : tab === 'claims' ? 'Claims' : tab === 'inbox' ? 'Inbox' : tab}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           <Card className="rounded-2xl md:rounded-[32px] border-none shadow-xl bg-white p-4 md:p-10 space-y-6 md:space-y-8">
@@ -518,6 +676,7 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
                   <tr className="text-[9px] font-bold uppercase tracking-[0.2em] text-slate-400 border-b border-slate-50">
                     <th className="px-10 py-5">CLAIM/ASSET</th>
                     <th className="px-10 py-5">STATUS</th>
+                    <th className="px-10 py-5">DUE DATE</th>
                     <th className="px-10 py-5">SLA DEADLINE</th>
                     <th className="px-10 py-5">FINANCE HANDSHAKE</th>
                     <th className="px-10 py-5 text-right">ACTION</th>
@@ -533,7 +692,31 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
                           <p className="text-sm font-bold text-[#E31B23] uppercase tracking-tight italic leading-none">{claim.vehicle}</p>
                         </td>
                         <td className="px-10 py-6">
-                          <Badge status={claim.status} className="mb-1 text-[8px] font-bold px-3 py-0.5 rounded-md uppercase">{claim.status}</Badge>
+                          <div className="space-y-3">
+                            <Badge status={claim.status} className="text-[8px] font-bold px-3 py-0.5 rounded-md uppercase">{claim.status}</Badge>
+                            <div className="w-32">
+                              <div className="flex justify-between items-center mb-1">
+                                <span className="text-[7px] font-black text-slate-400 uppercase tracking-widest italic">Lifecycle</span>
+                                <span className="text-[7px] font-black text-black uppercase tracking-widest italic">{claim.progress}%</span>
+                              </div>
+                              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                <div 
+                                  className="h-full bg-[#E31B23] transition-all duration-1000" 
+                                  style={{ width: `${claim.progress}%` }} 
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-10 py-6">
+                          {claim.dueDate ? (
+                            <div className="flex items-center gap-2 text-[10px] font-black text-black uppercase italic">
+                              <Calendar size={12} className="text-[#E31B23]" />
+                              {new Date(claim.dueDate).toLocaleDateString()}
+                            </div>
+                          ) : (
+                            <span className="text-[9px] font-bold text-zinc-300 uppercase italic">Not Set</span>
+                          )}
                         </td>
                         <td className="px-10 py-6">
                           <div className="space-y-2">
@@ -629,10 +812,20 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
                            <p className="text-5xl font-black italic tracking-tighter text-white">{selectedClaim.consistencyIndex || 0}%</p>
                         </div>
                         <div className="bg-zinc-900/50 p-8 rounded-3xl space-y-6">
-                           <div className="flex items-center gap-3 text-[#E31B23]">
-                              <Brain size={18} />
-                              <h3 className="text-xs font-black uppercase tracking-widest italic text-white">Neural Logic</h3>
-                           </div>
+                           <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3 text-[#E31B23]">
+                                 <Brain size={18} />
+                                 <h3 className="text-xs font-black uppercase tracking-widest italic text-white">Neural Logic</h3>
+                              </div>
+                              <Button 
+                                onClick={runNeuralAudit} 
+                                disabled={isNeuralAuditing}
+                                className="h-8 px-3 bg-[#E31B23] text-white text-[8px] font-black rounded-lg hover:bg-red-700 transition-all flex items-center gap-2"
+                              >
+                                {isNeuralAuditing ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                                RUN AUDIT
+                              </Button>
+                            </div>
                            <p className="text-[11px] font-medium italic text-zinc-400 leading-relaxed max-h-24 overflow-y-auto custom-scrollbar">
                              "{selectedClaim.assessorFindings || "No assessment logic linked yet."}"
                            </p>
@@ -693,14 +886,14 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
                       </div>
                       <div className="flex flex-col gap-3">
                         <Button 
-                          disabled={selectedClaim.insurancePaid || selectedClaim.negotiationPending || selectedClaim.status === 'Settled'}
+                          disabled={selectedClaim.status === 'Paid' || selectedClaim.negotiationPending}
                           onClick={() => setShowPaymentBridge(true)}
-                          className={`w-full h-18 text-[10px] font-black italic rounded-2xl shadow-xl transition-all ${selectedClaim.status === 'Approved' ? 'bg-green-600 hover:bg-green-700' : 'bg-[#635bff] hover:bg-[#5851e0]'} text-white`}
+                          className={`w-full h-18 text-[10px] font-black italic rounded-2xl shadow-xl transition-all ${selectedClaim.status === 'Approved' || selectedClaim.status === 'Settled' ? 'bg-green-600 hover:bg-green-700' : 'bg-[#635bff] hover:bg-[#5851e0]'} text-white`}
                         >
-                          {selectedClaim.status === 'Settled' ? 'AUDIT ARCHIVED' : selectedClaim.status === 'Approved' ? 'PROCESS PAYOUT' : `DISBURSE $${selectedClaim.coverage.toLocaleString()}`}
+                          {selectedClaim.status === 'Paid' ? 'CLAIM PAID ✓' : selectedClaim.status === 'Settled' ? 'PROCESS PAYOUT' : selectedClaim.status === 'Approved' ? 'INITIATE SETTLEMENT' : `DISBURSE $${selectedClaim.coverage.toLocaleString()}`}
                         </Button>
                         
-                        {!selectedClaim.insurancePaid && selectedClaim.status !== 'Settled' && (
+                        {selectedClaim.status !== 'Paid' && selectedClaim.status !== 'Settled' && (
                           <Button 
                             variant="outline"
                             onClick={() => {
@@ -718,6 +911,38 @@ const SupportDashboard: React.FC<SupportDashboardProps> = ({ session, activeTab,
                       )}
                     </div>
                   </Card>
+
+                  {selectedClaim.status === 'Reviewing' && !selectedClaim.assignedAssessor && (
+                    <Card className="p-8 bg-white border-zinc-100 rounded-[32px] space-y-6 shadow-xl border-t-4 border-t-[#E31B23]">
+                      <div className="space-y-2">
+                        <h3 className="text-[9px] font-black uppercase text-zinc-400 flex items-center gap-3 tracking-widest italic">
+                          <UserPlus size={18} className="text-[#E31B23]" /> Assessor Assignment
+                        </h3>
+                        <p className="text-[10px] font-bold text-zinc-500 uppercase italic">Select an available field agent</p>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        <select 
+                          value={targetAssessorId}
+                          onChange={(e) => setTargetAssessorId(e.target.value)}
+                          className="w-full h-14 bg-zinc-50 border border-zinc-100 rounded-xl px-4 text-[10px] font-black uppercase tracking-widest italic outline-none focus:border-black transition-all appearance-none cursor-pointer"
+                        >
+                          <option value="">Select Assessor...</option>
+                          {assessors.map(a => (
+                            <option key={a.id} value={a.id}>{a.name} ({a.id})</option>
+                          ))}
+                        </select>
+                        
+                        <Button 
+                          onClick={handleAssignAssessor}
+                          disabled={isAssigning || !targetAssessorId}
+                          className="w-full h-14 bg-black text-white text-[10px] font-black rounded-xl hover:bg-[#E31B23] transition-all shadow-lg flex items-center justify-center gap-3"
+                        >
+                          {isAssigning ? <Loader2 size={18} className="animate-spin" /> : <><Send size={16} /> DEPLOY AGENT</>}
+                        </Button>
+                      </div>
+                    </Card>
+                  )}
 
                   <Card className="p-8 bg-white border-zinc-100 rounded-[32px] space-y-6 shadow-xl">
                     <h3 className="text-[9px] font-black uppercase text-zinc-400 flex items-center gap-3 tracking-widest italic"><UserCog size={18} className="text-[#E31B23]" /> Repair Partner Node</h3>

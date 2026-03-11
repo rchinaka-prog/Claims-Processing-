@@ -27,7 +27,8 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const [showVerificationSent, setShowVerificationSent] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
   const [resendSuccess, setResendSuccess] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
+  const [pendingUser, setPendingUser] = useState<any>(null);
   
   const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -52,21 +53,8 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     special: false
   });
 
-  // Load remembered user on mount and initialize demo accounts
+  // Load remembered user on mount
   useEffect(() => {
-    // Initialize demo accounts if none exist
-    const existingUsers = JSON.parse(localStorage.getItem('aims_registered_users') || '[]');
-    if (existingUsers.length === 0) {
-      const demoUsers = [
-        { email: 'customer@aims.com', password: 'password123', role: UserRole.CUSTOMER, fullName: 'DEMO CUSTOMER', verified: true },
-        { email: 'assessor@aims.com', password: 'password123', role: UserRole.ASSESSOR, fullName: 'DEMO ASSESSOR', verified: true },
-        { email: 'support@aims.com', password: 'password123', role: UserRole.SUPPORT_STAFF, fullName: 'DEMO SUPPORT', verified: true },
-        { email: 'repair@aims.com', password: 'password123', role: UserRole.REPAIR_PARTNER, fullName: 'DEMO REPAIR', verified: true },
-        { email: 'manager@aims.com', password: 'password123', role: UserRole.MANAGER, fullName: 'DEMO MANAGER', verified: true },
-      ];
-      localStorage.setItem('aims_registered_users', JSON.stringify(demoUsers));
-    }
-
     const saved = localStorage.getItem('aims_remembered_user');
     if (saved) {
       try {
@@ -147,73 +135,106 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
       return;
     }
     setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setLoading(false);
 
-    const users = JSON.parse(localStorage.getItem('aims_registered_users') || '[]');
+    try {
+      if (view === 'signup') {
+        const res = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.toLowerCase(), full_name: fullName, role, phone: phoneNumber })
+        });
+        
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || "Registration failed");
+        }
+        
+        const user = await res.json();
+        if (role === UserRole.CUSTOMER) {
+          setShowVerificationSent(true);
+        } else {
+          completeLogin(user);
+        }
+      } else if (view === 'login') {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.toLowerCase() })
+        });
+        
+        if (!res.ok) {
+          const err = await res.json();
+          if (err.error === "Invalid credentials" || err.error === "User not found") {
+            if (window.confirm("Account not found. Would you like to create a new account?")) {
+              setView('signup');
+              setLoading(false);
+              return;
+            }
+          }
+          throw new Error(err.error || "Login failed");
+        }
+        
+        const user = await res.json();
+        if (user.role !== role) {
+          throw new Error("Account not found for this role. Please check your role selection.");
+        }
 
-    if (view === 'signup') {
-      if (users.find((u: any) => u.email === email)) {
-        alert("This email is already registered. Please login.");
-        setView('login');
-        return;
+        if (role === UserRole.CUSTOMER && user.verificationRequired) {
+          setShowVerificationSent(true);
+        } else {
+          completeLogin(user);
+        }
+      } else if (view === 'phoneLogin') {
+        if (!otpSent) {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email.toLowerCase() })
+          });
+          
+          if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || "Login failed");
+          }
+          
+          setOtpSent(true);
+          setLoading(false);
+          return;
+        }
+        
+        const res = await fetch('/api/auth/verify-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.toLowerCase(), code: otp })
+        });
+        
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || "Invalid verification code");
+        }
+        
+        const user = await res.json();
+        completeLogin(user);
       }
-      
-      const newUser = { 
-        email, 
-        password, 
-        role, 
-        fullName, 
-        verified: role !== UserRole.CUSTOMER // Auto-verify staff for demo, customers need email
-      };
-      users.push(newUser);
-      localStorage.setItem('aims_registered_users', JSON.stringify(users));
-
-      if (role === UserRole.CUSTOMER) {
-        setShowVerificationSent(true);
-      } else {
-        completeLogin();
-      }
-      return;
+    } catch (error: any) {
+      alert(error.message);
+    } finally {
+      setLoading(false);
     }
+  };
 
-    if (view === 'login') {
-      const existingUser = users.find((u: any) => u.email === email && u.role === role);
-      
-      if (!existingUser) {
-        alert("Account not found for this role. Please register first.");
-        setView('signup');
-        return;
-      }
-
-      if (existingUser.password !== password) {
-        alert("Incorrect password. Please try again.");
-        return;
-      }
-
-      if (role === UserRole.CUSTOMER && !existingUser.verified) {
-        setShowVerificationSent(true);
-        return;
-      }
-
-      completeLogin();
-      return;
-    }
-
-    if (view === 'phoneLogin') {
-      const user = users.find((u: any) => u.email === email && u.role === role);
-      if (!user) {
-        alert("This email is not registered. Please create an account first.");
-        setView('signup');
-        return;
-      }
-      if (!otpSent) {
-        setOtpSent(true);
-        return;
-      }
-      completeLogin();
-      return;
-    }
+  const getEmailProviderUrl = (email: string) => {
+    const domain = email.split('@')[1]?.toLowerCase();
+    if (!domain) return 'https://www.google.com/search?q=webmail+login';
+    
+    if (domain.includes('gmail')) return 'https://mail.google.com';
+    if (domain.includes('outlook') || domain.includes('hotmail') || domain.includes('live') || domain.includes('msn')) return 'https://outlook.live.com';
+    if (domain.includes('yahoo')) return 'https://mail.yahoo.com';
+    if (domain.includes('icloud')) return 'https://www.icloud.com/mail';
+    if (domain.includes('proton')) return 'https://mail.proton.me';
+    if (domain.includes('zoho')) return 'https://mail.zoho.com';
+    
+    return `https://${domain}`;
   };
 
   const handleRecovery = async (e: React.FormEvent) => {
@@ -222,15 +243,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     await new Promise(resolve => setTimeout(resolve, 2000));
     setLoading(false);
 
-    const domain = recoveryEmail.split('@')[1]?.toLowerCase();
-    let url = 'https://www.google.com/search?q=webmail+login';
-    if (domain) {
-      if (domain.includes('gmail')) url = 'https://mail.google.com';
-      else if (domain.includes('outlook') || domain.includes('hotmail') || domain.includes('live')) url = 'https://outlook.live.com';
-      else if (domain.includes('yahoo')) url = 'https://mail.yahoo.com';
-      else url = `https://${domain}`;
-    }
-
+    const url = getEmailProviderUrl(recoveryEmail);
     setRedirectUrl(url);
     setIsRecoverySuccess(true);
   };
@@ -247,24 +260,14 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     return () => clearInterval(timer);
   }, [isRecoverySuccess, countdown, redirectUrl]);
 
-  const completeLogin = () => {
+  const completeLogin = (user: any) => {
     // Save details if remember me is checked
     if (rememberMe) {
-      localStorage.setItem('aims_remembered_user', JSON.stringify({ email: email, role }));
+      localStorage.setItem('aims_remembered_user', JSON.stringify({ email: user.email, role: user.role }));
     } else {
       localStorage.removeItem('aims_remembered_user');
     }
 
-    const users = JSON.parse(localStorage.getItem('aims_registered_users') || '[]');
-    const user = {
-      id: crypto.randomUUID(),
-      email: email,
-      phone: phoneNumber || '0786413281',
-      full_name: fullName || email.split('@')[0].toUpperCase(),
-      role: role,
-      verified: role !== UserRole.CUSTOMER || (users.find((u: any) => u.email === email)?.verified || false),
-      created_at: new Date().toISOString()
-    };
     onLogin({ user }, rememberMe);
   };
 
@@ -293,51 +296,148 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     );
   }
 
-  const verifyAndLogin = () => {
-    const users = JSON.parse(localStorage.getItem('aims_registered_users') || '[]');
-    const userIdx = users.findIndex((u: any) => u.email === email);
-    if (userIdx !== -1) {
-      users[userIdx].verified = true;
-      localStorage.setItem('aims_registered_users', JSON.stringify(users));
+  const [verificationCode, setVerificationCode] = useState(['', '', '', '', '', '']);
+  const verificationInputs = useRef<(HTMLInputElement | null)[]>([]);
+
+  const handleVerificationCodeChange = (index: number, value: string) => {
+    if (value.length > 1) value = value[0];
+    const newCode = [...verificationCode];
+    newCode[index] = value;
+    setVerificationCode(newCode);
+
+    // Auto-focus next input
+    if (value && index < 5) {
+      verificationInputs.current[index + 1]?.focus();
     }
-    setShowVerificationSent(false);
-    completeLogin();
+  };
+
+  const handleVerificationKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace' && !verificationCode[index] && index > 0) {
+      verificationInputs.current[index - 1]?.focus();
+    }
+  };
+
+  const verifyAndLogin = async () => {
+    setLoading(true);
+    try {
+      const code = verificationCode.join('');
+      if (code.length < 6) throw new Error("Please enter the full 6-digit code");
+
+      const res = await fetch('/api/auth/verify-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.toLowerCase(), code })
+      });
+      
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Verification failed");
+      }
+      
+      const user = await res.json();
+      setShowVerificationSent(false);
+      completeLogin(user);
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const checkVerificationStatus = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.toLowerCase() })
+      });
+      const user = await res.json();
+      if (user.verified) {
+        setShowVerificationSent(false);
+        completeLogin(user);
+      } else {
+        alert("Account not verified yet. Please click the link in your email or enter the 6-digit code.");
+      }
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleResendVerification = async () => {
     setResendLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setResendLoading(false);
-    setResendSuccess(true);
-    setTimeout(() => setResendSuccess(false), 3000);
+    try {
+      const res = await fetch('/api/auth/resend-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.toLowerCase() })
+      });
+      if (!res.ok) throw new Error("Failed to resend code");
+      
+      setResendSuccess(true);
+      setTimeout(() => setResendSuccess(false), 3000);
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setResendLoading(false);
+    }
   };
 
   if (showVerificationSent) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6 bg-black">
-        <Card className="w-full max-w-md p-10 text-center space-y-8 border-none shadow-[0_0_100px_rgba(227,27,35,0.1)] relative z-10">
-          <div className="w-16 h-16 bg-black text-[#E31B23] border-b-4 border-[#E31B23] mx-auto flex items-center justify-center shadow-2xl">
+      <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
+        <Card className="w-full max-w-md p-10 text-center space-y-8 border-t-8 border-[#E31B23] shadow-2xl relative z-10">
+          <div className="w-16 h-16 bg-red-50 text-[#E31B23] rounded-2xl mx-auto flex items-center justify-center shadow-lg">
             <MailCheck size={32} className="animate-bounce" />
           </div>
           <div className="space-y-3">
-            <h2 className="text-xl font-black uppercase tracking-tighter italic">Verify Your Email</h2>
-            <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">We've sent a verification link to {email}</p>
+            <h2 className="text-xl font-black uppercase tracking-tighter italic text-black">Verify Your Email</h2>
+            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">We've sent a 6-digit code or verification link to {email}</p>
           </div>
           
           {resendSuccess && (
             <div className="p-4 bg-green-50 text-green-600 rounded-xl text-[10px] font-bold uppercase tracking-widest animate-in fade-in slide-in-from-top-2">
-              Verification email resent successfully!
+              Verification code resent successfully!
             </div>
           )}
 
+          <div className="flex justify-center gap-2">
+            {verificationCode.map((digit, i) => (
+              <input 
+                key={i}
+                ref={el => { verificationInputs.current[i] = el; }}
+                maxLength={1}
+                value={digit}
+                onChange={e => handleVerificationCodeChange(i, e.target.value)}
+                onKeyDown={e => handleVerificationKeyDown(i, e)}
+                className="w-14 h-16 bg-zinc-50 border-2 border-zinc-200 text-center text-2xl font-black text-black outline-none focus:border-[#E31B23] focus:bg-white transition-all rounded-xl shadow-sm" 
+              />
+            ))}
+          </div>
+
           <div className="p-6 bg-zinc-50 rounded-2xl border border-zinc-100 text-[10px] font-bold text-zinc-500 italic">
-            In a real system, you would click the link in your inbox. For this demo, click below to simulate verification.
+            Check your inbox (and spam) for the security code. For testing, you can use <span className="text-[#E31B23]">123456</span>.
           </div>
           
           <div className="space-y-4">
-            <Button onClick={verifyAndLogin} className="w-full h-16 text-[11px]" disabled={loading}>
-              {loading ? <Loader2 className="animate-spin" /> : 'SIMULATE EMAIL VERIFICATION'}
+            <Button onClick={() => window.location.href = getEmailProviderUrl(email)} className="w-full h-16 bg-white text-black border-2 border-black hover:bg-zinc-50 flex items-center justify-center gap-3 text-[11px] shadow-xl">
+              <ExternalLink size={18} /> OPEN INBOX
             </Button>
+            
+            <Button onClick={verifyAndLogin} className="w-full h-16 text-[11px]" disabled={loading}>
+              {loading ? <Loader2 className="animate-spin" /> : 'VERIFY & CONTINUE'}
+            </Button>
+            
+            <button 
+              onClick={checkVerificationStatus}
+              disabled={loading}
+              className="w-full py-4 text-[9px] font-black text-black bg-white border-2 border-black rounded-xl uppercase hover:bg-zinc-50 tracking-widest flex items-center justify-center gap-2 transition-all"
+            >
+              {loading ? <Loader2 size={14} className="animate-spin" /> : <ExternalLink size={14} />}
+              I've clicked the verification link
+            </button>
             
             <button 
               onClick={handleResendVerification} 
@@ -345,11 +445,11 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
               className="w-full py-4 text-[9px] font-black text-zinc-400 uppercase hover:text-[#E31B23] tracking-widest flex items-center justify-center gap-2 transition-colors"
             >
               {resendLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-              Resend Verification Email
+              Resend Verification Code
             </button>
           </div>
 
-          <button onClick={() => setShowVerificationSent(false)} className="text-[9px] font-black text-zinc-400 uppercase hover:text-black tracking-widest">
+          <button onClick={() => setShowVerificationSent(false)} className="text-[9px] font-black text-zinc-400 uppercase hover:text-white tracking-widest">
             Back to Login
           </button>
         </Card>
@@ -373,7 +473,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
               <input key={i} maxLength={1} className="w-8 h-12 bg-zinc-50 border-2 border-zinc-100 text-center text-xl font-black text-black outline-none focus:border-[#E31B23]" />
             ))}
           </div>
-          <Button onClick={() => completeLogin()} className="w-full h-16 text-[11px]" disabled={loading}>
+          <Button onClick={() => completeLogin(pendingUser)} className="w-full h-16 text-[11px]" disabled={loading}>
             {loading ? <Loader2 className="animate-spin" /> : 'SECURE ACCESS'}
           </Button>
         </Card>
@@ -459,9 +559,30 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                 )}
               </div>
               <div className="space-y-3">
+                <div className="flex items-center justify-between mb-2 p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                  <label className="flex items-center gap-3 cursor-pointer group">
+                    <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${rememberMe ? 'bg-black border-black shadow-lg' : 'border-zinc-200 bg-white'}`}>
+                      {rememberMe && <Check size={14} className="text-white stroke-[3px]" />}
+                    </div>
+                    <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} className="hidden" />
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-black text-black uppercase tracking-widest italic">Remember Me</span>
+                      <span className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Stay logged in</span>
+                    </div>
+                  </label>
+                </div>
                 <Button type="submit" disabled={loading} className="w-full h-16 group text-[11px]">
                   {loading ? <Loader2 className="animate-spin" /> : (otpSent ? 'VERIFY & LOGIN' : 'SEND CODE')}
                 </Button>
+                {otpSent && (
+                  <button 
+                    type="button" 
+                    onClick={() => window.location.href = getEmailProviderUrl(email)}
+                    className="w-full py-4 text-[9px] font-black text-black bg-white border-2 border-black rounded-xl uppercase hover:bg-zinc-50 tracking-widest flex items-center justify-center gap-2 transition-all"
+                  >
+                    <ExternalLink size={14} /> Open Inbox
+                  </button>
+                )}
                 <button type="button" onClick={() => { setView('login'); setOtpSent(false); }} className="w-full py-4 text-[9px] font-black text-zinc-400 uppercase flex items-center justify-center gap-2 hover:text-black">
                    <ArrowLeft size={14} /> Back to Login
                 </button>
@@ -566,18 +687,21 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
               </div>
 
               <div className="flex flex-col gap-3">
-                {view === 'login' && (
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="flex items-center gap-3 cursor-pointer group">
-                      <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${rememberMe ? 'bg-black border-black' : 'border-zinc-200 bg-white'}`}>
-                        {rememberMe && <Check size={12} className="text-white" />}
-                      </div>
-                      <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} className="hidden" />
-                      <span className="text-[9px] font-black text-zinc-400 uppercase group-hover:text-black tracking-widest italic">Keep me logged in</span>
-                    </label>
-                    <button type="button" onClick={() => setView('forgotPassword')} className="text-[9px] font-black text-zinc-400 uppercase hover:text-[#E31B23] tracking-widest italic">Forgot Password?</button>
-                  </div>
-                )}
+                <div className="flex items-center justify-between mb-2 p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                  <label className="flex items-center gap-3 cursor-pointer group">
+                    <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${rememberMe ? 'bg-black border-black shadow-lg' : 'border-zinc-200 bg-white'}`}>
+                      {rememberMe && <Check size={14} className="text-white stroke-[3px]" />}
+                    </div>
+                    <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} className="hidden" />
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-black text-black uppercase tracking-widest italic">Remember Me</span>
+                      <span className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Stay logged in on this device</span>
+                    </div>
+                  </label>
+                  {view === 'login' && (
+                    <button type="button" onClick={() => setView('forgotPassword')} className="text-[9px] font-black text-[#E31B23] uppercase hover:underline tracking-widest italic">Forgot Password?</button>
+                  )}
+                </div>
                 <Button 
                   type="submit" 
                   disabled={loading || (view === 'signup' && passwordStrength.score < 2)} 

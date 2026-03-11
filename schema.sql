@@ -7,22 +7,45 @@ USE autoclaim_pro;
 CREATE TABLE IF NOT EXISTS claims (
     id VARCHAR(50) PRIMARY KEY,
     owner VARCHAR(255),
+    customer VARCHAR(255),
     phone VARCHAR(50),
+    email VARCHAR(255),
     car VARCHAR(255),
+    vehicle VARCHAR(255),
+    regNo VARCHAR(50),
+    policyNo VARCHAR(50),
     incidentDate DATE,
     status VARCHAR(50),
+    priority VARCHAR(20),
     riskLevel VARCHAR(20),
     coverage DECIMAL(15, 2),
+    amount VARCHAR(50),
     location VARCHAR(255),
+    time VARCHAR(50),
+    distance VARCHAR(50),
+    userStatement TEXT,
     description TEXT,
     neuralSummary TEXT,
+    assessorFindings TEXT,
     consistencyScore INT,
+    consistencyIndex INT,
+    historyScore VARCHAR(50),
     insurancePaid BOOLEAN DEFAULT FALSE,
     paymentDetails JSON,
     scratchpad TEXT,
     damageReason TEXT,
     damagedParts JSON,
     statementAgreement JSON,
+    repairEvidence JSON,
+    assignedAssessor VARCHAR(255),
+    assignedTo VARCHAR(255),
+    repairer VARCHAR(255),
+    progress INT DEFAULT 0,
+    slaStatus VARCHAR(50),
+    slaDeadline DATETIME,
+    dueDate DATETIME,
+    startDate DATETIME,
+    endDate DATETIME,
     submittedAt DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -67,4 +90,16 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     action VARCHAR(100),
     details JSON
+);
+
+-- Users Table
+CREATE TABLE IF NOT EXISTS users (
+    id VARCHAR(50) PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    full_name VARCHAR(255),
+    role VARCHAR(50),
+    phone VARCHAR(50),
+    verified BOOLEAN DEFAULT FALSE,
+    verificationCode VARCHAR(10),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

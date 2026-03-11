@@ -15,7 +15,8 @@ import {
   LogOut, Bell, User as UserIcon, Menu,
   PlusCircle, Inbox, FileText, History, 
   Wrench, List, Activity, BarChart3, ShieldCheck, UserCog, ClipboardList, TrendingUp, Search, Shield, CreditCard, DollarSign,
-  Truck, X, LayoutDashboard, SmartphoneNfc, Smartphone, Camera, MessageCircle, Send, Zap, Loader2, ShieldAlert
+  Truck, X, LayoutDashboard, SmartphoneNfc, Smartphone, Camera, MessageCircle, Send, Zap, Loader2, ShieldAlert,
+  Calendar, MessageSquare, Users, Headset
 } from 'lucide-react';
 
 import { io, Socket } from 'socket.io-client';
@@ -398,6 +399,7 @@ const App: React.FC = () => {
           phone: '0786413281',
           full_name: 'FIELD OPERATOR',
           role: UserRole.ASSESSOR,
+          verified: true,
           created_at: new Date().toISOString()
         }
       });
@@ -484,6 +486,16 @@ const App: React.FC = () => {
 
   const handleLogin = (newSession: AuthSession, rememberMe: boolean) => {
     setSession(newSession);
+    
+    // Set default tab based on role
+    switch (newSession.user.role) {
+      case UserRole.CUSTOMER: setActiveTab('dashboard'); break;
+      case UserRole.ASSESSOR: setActiveTab('visits'); break;
+      case UserRole.REPAIR_PARTNER: setActiveTab('shop'); break;
+      case UserRole.SUPPORT_STAFF: setActiveTab('main'); break;
+      case UserRole.MANAGER: setActiveTab('overview'); break;
+    }
+
     if (rememberMe) {
       localStorage.setItem('autoclaim_session', JSON.stringify(newSession));
     } else {
@@ -514,13 +526,13 @@ const App: React.FC = () => {
       case UserRole.CUSTOMER: 
         return <CustomerDashboard session={session} activeTab={activeTab} onTabChange={setActiveTab} onLogout={handleLogout} />;
       case UserRole.ASSESSOR: 
-        return <AssessorDashboard onLogout={handleLogout} sessionEmail={session.user.email} addNotification={addNotification} />;
+        return <AssessorDashboard onLogout={handleLogout} sessionEmail={session.user.email} addNotification={addNotification} activeTab={activeTab} onTabChange={setActiveTab} />;
       case UserRole.REPAIR_PARTNER: 
-        return <RepairPartnerDashboard onLogout={handleLogout} />;
+        return <RepairPartnerDashboard onLogout={handleLogout} activeTab={activeTab as any} onTabChange={setActiveTab} />;
       case UserRole.SUPPORT_STAFF: 
         return <SupportDashboard session={session} activeTab={activeTab as any} onTabChange={setActiveTab as any} addNotification={addNotification} onLogout={handleLogout} />;
       case UserRole.MANAGER: 
-        return <ManagementDashboard onLogout={handleLogout} />;
+        return <ManagementDashboard onLogout={handleLogout} activeTab={activeTab as any} onTabChange={setActiveTab} />;
       default: 
         return <CustomerDashboard session={session} activeTab={activeTab} onTabChange={setActiveTab} onLogout={handleLogout} />;
     }
@@ -553,12 +565,15 @@ const App: React.FC = () => {
       case UserRole.ASSESSOR:
         return [
           { id: 'visits', label: 'Field Ops', icon: <ClipboardList size={20} /> },
+          { id: 'schedule', label: 'My Schedule', icon: <Calendar size={20} /> },
+          { id: 'comms', label: 'Comms Hub', icon: <MessageSquare size={20} /> },
         ];
       case UserRole.REPAIR_PARTNER:
         return [
-          { id: 'shop', label: 'My Bay', icon: <Wrench size={20} /> },
-          { id: 'jobs', label: 'Marketplace', icon: <List size={20} /> },
-          { id: 'history', label: 'Past Jobs', icon: <History size={20} /> },
+          { id: 'shop', label: 'Marketplace', icon: <Inbox size={20} /> },
+          { id: 'active', label: 'Workshop', icon: <Wrench size={20} /> },
+          { id: 'calendar', label: 'Calendar', icon: <Calendar size={20} /> },
+          { id: 'reputation', label: 'Trust Index', icon: <ShieldCheck size={20} /> },
         ];
       case UserRole.SUPPORT_STAFF:
         return [
@@ -571,6 +586,10 @@ const App: React.FC = () => {
       case UserRole.MANAGER:
         return [
           { id: 'overview', label: 'Executive Deck', icon: <BarChart3 size={20} /> },
+          { id: 'staff', label: 'Staff Audit', icon: <Users size={20} /> },
+          { id: 'reports', label: 'Reports', icon: <FileText size={20} /> },
+          { id: 'compliance', label: 'Compliance', icon: <ShieldAlert size={20} /> },
+          { id: 'users', label: 'User Registry', icon: <UserCog size={20} /> },
         ];
       default:
         return [];
@@ -654,7 +673,7 @@ const App: React.FC = () => {
                 onClick={() => setNotificationPanelOpen(!isNotificationPanelOpen)}
                 className={`w-10 h-10 md:w-12 md:h-12 rounded-xl md:rounded-2xl border flex items-center justify-center relative transition-all ${notifications.filter(n => !n.isRead).length > 0 ? 'bg-red-50 border-red-100 text-[#E31B23]' : 'bg-slate-50 border-slate-100 text-slate-500'}`}
               >
-                <Bell size={18} md:size={20} />
+                <Bell size={20} />
                 {notifications.filter(n => !n.isRead).length > 0 && (
                   <span className="absolute -top-1 -right-1 w-4 h-4 md:w-5 md:h-5 bg-[#E31B23] text-white text-[8px] md:text-[10px] font-black rounded-full border-2 border-white flex items-center justify-center">
                     {notifications.filter(n => !n.isRead).length}
@@ -692,7 +711,7 @@ const App: React.FC = () => {
                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest truncate max-w-[120px]">{session.user.role.replace('_', ' ')}</p>
               </div>
               <div className="w-10 h-10 md:w-12 md:h-12 rounded-xl md:rounded-2xl bg-black text-white flex items-center justify-center font-black italic shadow-lg hover:bg-[#E31B23] transition-colors">
-                <LogOut size={18} md:size={20} />
+                <LogOut size={20} />
               </div>
             </div>
           </div>

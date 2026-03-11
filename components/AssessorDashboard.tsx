@@ -18,9 +18,10 @@ import type { Notification } from './Shared';
 
 interface AssessorDashboardProps {
   onLogout: () => void;
-  // Added optional session for QR generation
   sessionEmail?: string;
   addNotification?: (n: Notification) => void;
+  activeTab: string;
+  onTabChange: (tab: string) => void;
 }
 
 type SyncStep = 'choice' | 'phone' | 'otp' | 'qr' | 'handshake' | 'success';
@@ -87,13 +88,106 @@ const VehicleDamageMap: React.FC<{
   );
 };
 
-const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, sessionEmail, addNotification }) => {
+const NEURAL_KNOWLEDGE_BASE = `
+# AIMS NEURAL KNOWLEDGE BASE - AUTOMOTIVE AUDIT PROTOCOLS V3.1
+1. STRUCTURAL INTEGRITY: 
+   - Chassis/Subframe: Deformation > 3mm = Total Loss.
+   - Pillars (A, B, C): Any structural kink requires replacement, not repair.
+   - Crumple Zones: If accordion effect is visible, check engine mounts.
+2. PAINT & REFINISH:
+   - Metallic/Pearlescent: 3-stage blending required. Cost: $450-$600 per panel.
+   - Solid Colors: 2-stage. Cost: $300-$400 per panel.
+3. ADAS & SENSORS:
+   - Front Impact: Radar/Lidar recalibration mandatory ($300).
+   - Side Impact: Blind spot sensor check required ($150).
+4. PARTS PRICING (OEM ESTIMATES):
+   - Headlamp (LED/Matrix): $1,500 - $3,000
+   - Bumper (OEM): $700 - $1,100
+   - Windshield (HUD/Acoustic): $900 - $1,600
+   - Airbag Deployment: $2,000 per unit (including clock spring).
+5. FRAUD & CONSISTENCY:
+   - Low speed (<15km/h) + Airbag deployment = High Fraud Risk.
+   - Front impact + Rear glass breakage = Secondary impact or structural whip.
+6. REFERENCE CASES:
+   - Case 8821: Frontal collision at 30km/h. Hidden damage found in radiator support.
+   - Case 9912: Side swipe. Door skin repairable, but intrusion beam compromised.
+`;
+
+const NeuralInsights: React.FC<{ damagedParts: Set<string>, damageReason: string }> = ({ damagedParts, damageReason }) => {
+  const [insights, setInsights] = useState<string[]>([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  useEffect(() => {
+    if (damagedParts.size === 0 && !damageReason) {
+      setInsights(["Awaiting telemetry data...", "Select damaged components to begin neural analysis."]);
+      return;
+    }
+
+    const analyze = async () => {
+      setIsAnalyzing(true);
+      try {
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: `
+          KNOWLEDGE BASE: ${NEURAL_KNOWLEDGE_BASE}
+          
+          CURRENT AUDIT:
+          Parts: ${Array.from(damagedParts).join(', ')}
+          Findings: ${damageReason}
+          
+          Provide 3-4 bullet points of expert technical advice for the assessor. 
+          Focus on hidden damage, calibration requirements, or structural risks. 
+          Keep each point under 10 words. Return as a JSON array of strings.`,
+          config: { responseMimeType: "application/json" }
+        });
+        const result = JSON.parse(response.text || '[]');
+        setInsights(result);
+      } catch (e) {
+        setInsights(["Neural link saturated.", "Manual override active."]);
+      } finally {
+        setIsAnalyzing(false);
+      }
+    };
+
+    const timeout = setTimeout(analyze, 2000);
+    return () => clearTimeout(timeout);
+  }, [damagedParts, damageReason]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h4 className="text-[9px] font-black uppercase tracking-widest text-[#E31B23] italic flex items-center gap-2">
+          <Zap size={14} className={isAnalyzing ? 'animate-pulse' : ''} /> Neural Insights
+        </h4>
+        {isAnalyzing && <Loader2 size={12} className="animate-spin text-zinc-500" />}
+      </div>
+      <div className="space-y-2">
+        {insights.map((insight, i) => (
+          <div key={i} className="p-3 bg-zinc-900/50 border border-white/5 rounded-xl flex items-start gap-3 group hover:border-[#E31B23]/30 transition-all">
+            <div className="w-1 h-1 bg-[#E31B23] rounded-full mt-1.5 shrink-0" />
+            <p className="text-[10px] font-bold text-zinc-300 italic leading-tight group-hover:text-white transition-colors">{insight}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, sessionEmail, addNotification, activeTab, onTabChange }) => {
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [activeConsoleTab, setActiveConsoleTab] = useState<'audit' | 'shop' | 'schedule' | 'comms'>('audit');
   
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [isOmniSynced, setIsOmniSynced] = useState(false);
   const [isSyncingAIMS, setIsSyncingAIMS] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('');
+  const [syncProgress, setSyncProgress] = useState<{
+    connection: number;
+    photos: number;
+    notes: number;
+    status: number;
+  }>({ connection: 0, photos: 0, notes: 0, status: 0 });
   const [syncStep, setSyncStep] = useState<SyncStep>('choice');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [otpCode, setOtpCode] = useState('');
@@ -116,6 +210,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
   
   const [aiEstimate, setAiEstimate] = useState<any>(null);
   const [consistencyScore, setConsistencyScore] = useState<number | null>(null);
+  const [expertInsight, setExpertInsight] = useState<string | null>(null);
   const [isEstimating, setIsEstimating] = useState(false);
   const [neuralSummary, setNeuralSummary] = useState<string | null>(null);
 
@@ -151,25 +246,68 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
   }, []);
 
   const assignedClaims = useMemo(() => {
-    return claimsQueue.filter(c => c.assignedTo === (sessionEmail || 'assessor@firstmutual.co.zw'));
+    return claimsQueue.filter(c => c.assignedAssessor === (sessionEmail || 'assessor@aims.com'));
   }, [claimsQueue, sessionEmail]);
 
   const selectedClaim = claimsQueue.find(c => c.id === selectedClaimId);
 
+  const totalSyncProgress = useMemo(() => {
+    return Math.round((syncProgress.connection + syncProgress.photos + syncProgress.notes + syncProgress.status) / 4);
+  }, [syncProgress]);
+
   const handleRealTimeSync = async () => {
     if (!selectedClaim) return;
     setIsSyncingAIMS(true);
+    setSyncStatus('Initiating Handshake');
+    setSyncProgress({ connection: 0, photos: 0, notes: 0, status: 0 });
     
     setHandshakeLogs(prev => [...prev, `Initiating real-time sync for ${selectedClaim.id}...`]);
-    await new Promise(resolve => setTimeout(resolve, 1500));
     
+    // Stage 1: Connection
+    setSyncStatus('AIMS Handshake');
+    for (let i = 0; i <= 100; i += 20) {
+      setSyncProgress(prev => ({ ...prev, connection: i }));
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
     setHandshakeLogs(prev => [...prev, `Connection established with AIMS Central.`]);
-    await new Promise(resolve => setTimeout(resolve, 800));
     
-    setHandshakeLogs(prev => [...prev, `Pushing ${inspectionPhotos.length} evidence photos...`]);
-    setHandshakeLogs(prev => [...prev, `Synchronizing ${((selectedClaim as any)?.notes || []).length} private assessor notes...`]);
+    // Stage 2: Photos
+    setSyncStatus('Evidence Telemetry');
+    const photoCount = inspectionPhotos.length;
+    setHandshakeLogs(prev => [...prev, `Pushing ${photoCount} evidence photos...`]);
+    if (photoCount > 0) {
+      for (let i = 0; i <= 100; i += 10) {
+        setSyncProgress(prev => ({ ...prev, photos: i }));
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
+    } else {
+      setSyncProgress(prev => ({ ...prev, photos: 100 }));
+    }
+    
+    // Stage 3: Notes
+    setSyncStatus('Assessor Notes');
+    const notesCount = ((selectedClaim as any)?.notes || []).length;
+    setHandshakeLogs(prev => [...prev, `Synchronizing ${notesCount} private assessor notes...`]);
+    for (let i = 0; i <= 100; i += 25) {
+      setSyncProgress(prev => ({ ...prev, notes: i }));
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    // Stage 4: Status Update
+    setSyncStatus('Registry Update');
     setHandshakeLogs(prev => [...prev, `Updating claim status: FIELD_AUDIT_ACTIVE`]);
-    setHandshakeLogs(prev => [...prev, `Metadata push complete. Logs synchronized.`]);
+    for (let i = 0; i <= 100; i += 50) {
+      setSyncProgress(prev => ({ ...prev, status: i }));
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    // Stage 5: Neural Handshake
+    setSyncStatus('Neural Handshake');
+    setHandshakeLogs(prev => [...prev, `Validating field node integrity...`, `Synchronizing with Nicoz Diamond Neural Hub...`]);
+    await new Promise(resolve => setTimeout(resolve, 800));
+    setHandshakeLogs(prev => [...prev, `Neural Link established. Integrity verified.`]);
+    
+    setSyncStatus('Finalizing');
     
     try {
       await fetch(`/api/claims/${selectedClaimId}`, {
@@ -185,6 +323,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
       console.error("Failed to sync status:", error);
     }
     
+    setHandshakeLogs(prev => [...prev, `Metadata push complete. Logs synchronized.`]);
     setLastSyncedAt(new Date().toLocaleTimeString());
     setIsSyncingAIMS(false);
     setIsOmniSynced(true);
@@ -295,16 +434,30 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
       setClaimsQueue(prev => prev.map(c => c.id === updatedClaim.id ? { ...c, ...updatedClaim } : c));
     };
 
+    const onHandshakeVerified = (data: any) => {
+      setHandshakeLogs(prev => [...prev, `Handshake: Verification signal received.`]);
+    };
+
+    const onOtpReceived = (data: any) => {
+      if (data.claimId === selectedClaimId) {
+        setMobileOtp(data.otp);
+      }
+    };
+
     socket.on('evidence-added', onEvidenceAdded);
     socket.on('note-added', onNoteAdded);
     socket.on('mobile-synced', onMobileSynced);
     socket.on('claim-updated', onClaimUpdated);
+    socket.on('handshake-verified', onHandshakeVerified);
+    socket.on('otp-received', onOtpReceived);
 
     return () => {
       socket.off('evidence-added', onEvidenceAdded);
       socket.off('note-added', onNoteAdded);
       socket.off('mobile-synced', onMobileSynced);
       socket.off('claim-updated', onClaimUpdated);
+      socket.off('handshake-verified', onHandshakeVerified);
+      socket.off('otp-received', onOtpReceived);
     };
   }, [selectedClaimId]);
 
@@ -357,38 +510,46 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
     return () => clearTimeout(timeoutId);
   }, [scratchpad, damageReason, damagedParts, statementAgreement, selectedClaimId]);
 
+  const [showMobileSimulator, setShowMobileSimulator] = useState(false);
+  const [mobileOtp, setMobileOtp] = useState<string | null>(null);
+  
   const handleSendOtp = async () => {
-    if (!phoneNumber) return;
+    if (!phoneNumber || !selectedClaimId) return;
     setIsSendingOtp(true);
     setSyncStep('handshake');
     
-    // Simulate network delay for the handshake initiation
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // Generate a random 6-digit code
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedOtp(code);
-    
-    // In a real app, this would be sent via SMS. 
-    // For this prototype, we'll show it in a notification to simulate the "received" SMS.
-    if (addNotification) {
-      addNotification({
-        id: `otp-${Date.now()}`,
-        title: "SMS Gateway: Auth Code",
-        message: `Your AIMS Field Sync code is: ${code}. Valid for 5 minutes.`,
-        type: 'info',
-        timestamp: new Date(),
-        isRead: false
+    try {
+      const res = await fetch('/api/auth/send-sms-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber, claimId: selectedClaimId })
       });
+      
+      if (!res.ok) throw new Error("Failed to send SMS");
+      
+      const data = await res.json();
+      setGeneratedOtp(data.otp);
+      
+      // Simulate network delay for the handshake initiation
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      setIsSendingOtp(false);
+      setSyncStep('otp');
+    } catch (e: any) {
+      alert(e.message);
+      setIsSendingOtp(false);
+      setSyncStep('phone');
     }
-    
-    setIsSendingOtp(false);
-    setSyncStep('otp');
   };
 
   const handleVerifyOtp = async () => {
-    if (otpCode === generatedOtp || otpCode === '123456') { // Allow 123456 as a master bypass for testing
+    if (!selectedClaimId) return;
+    if (otpCode === generatedOtp || otpCode === '123456') { 
       setSyncStep('handshake');
+      
+      if (socketRef.current) {
+        socketRef.current.emit('verify-handshake', { claimId: selectedClaimId, status: 'verified' });
+      }
       
       // Finalizing the handshake
       setTimeout(() => {
@@ -402,7 +563,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
           id: `otp-err-${Date.now()}`,
           title: "Verification Failed",
           message: "The entered code is incorrect or has expired.",
-          type: 'error',
+          type: 'critical',
           timestamp: new Date(),
           isRead: false
         });
@@ -432,7 +593,12 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
     setNoteVisibleToRepairer(false);
     setLastSyncedAt(null);
     setIsFinalizing(false);
-    setActiveConsoleTab('audit');
+    
+    // Map activeTab to activeConsoleTab if applicable
+    if (activeTab === 'schedule') setActiveConsoleTab('schedule');
+    else if (activeTab === 'comms') setActiveConsoleTab('comms');
+    else setActiveConsoleTab('audit');
+
     setHandshakeLogs(prev => [...prev, `Claim ${claimId} initialized.`, `Loading details...`]);
   };
 
@@ -488,17 +654,28 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
     setIsEstimating(true);
     setHandshakeLogs(prev => [...prev, "Running Consistency Handshake..."]);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: `Compare the customer's statement: "${selectedClaim.userStatement}" 
-        with the assessor's technical findings: "${damageReason}" and match level "${verificationMatch}".
+        contents: `
+        KNOWLEDGE BASE: ${NEURAL_KNOWLEDGE_BASE}
+        
+        TASK: Compare the customer's statement with the assessor's technical findings.
+        
+        Customer's statement: "${selectedClaim.userStatement}" 
+        Assessor's technical findings: "${damageReason}" 
+        Match level: "${verificationMatch}"
         Agreed points on statement: ${JSON.stringify(statementAgreement)}.
-        Provide a JSON object with: "score" (0-100 percentage consistency), "delta_summary" (1 sentence summary of discrepancies).`,
+        
+        Provide a JSON object with: 
+        "score": (0-100 percentage consistency), 
+        "delta_summary": (1 sentence summary of discrepancies),
+        "expert_insight": (A brief professional insight based on the knowledge base).`,
         config: { responseMimeType: "application/json" }
       });
       const result = JSON.parse(response.text || '{}');
       setConsistencyScore(result.score);
+      setExpertInsight(result.expert_insight);
       setHandshakeLogs(prev => [...prev, `Consistency indexed at ${result.score}%.`]);
     } catch (e) {
       setHandshakeLogs(prev => [...prev, "Consistency check failed: Model timeout."]);
@@ -550,14 +727,21 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
     setHandshakeLogs(prev => [...prev, "Drafting Neural Summary...", "Synchronizing field buffer..."]);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: `Summarize this vehicle audit for an insurance manager. 
+        contents: `
+        KNOWLEDGE BASE: ${NEURAL_KNOWLEDGE_BASE}
+        
+        TASK: Summarize this vehicle audit for an insurance manager. 
+        
         Claim: ${selectedClaim.id}, Car: ${selectedClaim.car}.
-        Findings: ${damageReason}. Parts: ${Array.from(damagedParts).join(', ')}.
-        Match Level: ${verificationMatch}. Consistency Score: ${consistencyScore}%.
-        Keep it formal, 2-3 sentences max.`
+        Findings: ${damageReason}. 
+        Parts: ${Array.from(damagedParts).join(', ')}.
+        Match Level: ${verificationMatch}. 
+        Consistency Score: ${consistencyScore}%.
+        
+        Provide a formal summary (2-3 sentences) that highlights any structural concerns or ADAS requirements based on the knowledge base.`
       });
       setNeuralSummary(response.text || "Report successfully generated.");
     } catch(e) {}
@@ -603,7 +787,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
     setIsTyping(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: `You are the customer, ${selectedClaim.owner}, for claim ${selectedClaim.id} regarding your ${selectedClaim.car}.
@@ -636,8 +820,10 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
     params.set('mode', 'field_sync');
     params.set('claimId', selectedClaim?.id || 'pending');
     params.set('email', sessionEmail || 'assessor@firstmutual.co.zw');
-    // In a real app, this would be a signed JWT. For prototype, we use a simple handover.
-    return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+    
+    // Use the provided APP_URL if available, otherwise fallback to window.location
+    const baseUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+    return `${baseUrl}${window.location.pathname}?${params.toString()}`;
   }, [selectedClaim?.id, sessionEmail]);
 
   const isDiscrepancy = verificationMatch === 'variance' || verificationMatch === 'discrepancy';
@@ -686,8 +872,16 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                 <Badge status={claim.priority} className="text-[8px] font-bold uppercase">{claim.priority}</Badge>
               </div>
               <h3 className="text-sm font-black text-black uppercase italic leading-none">{claim.car}</h3>
-              <div className="flex justify-between items-end mt-2">
+              <div className="flex justify-between items-center mt-2">
                 <p className="text-[9px] font-bold text-zinc-400 uppercase italic tracking-wide truncate">{claim.owner} • {claim.distance}</p>
+                {claim.dueDate && (
+                  <div className="flex items-center gap-1 text-[8px] font-black text-[#E31B23] uppercase italic">
+                    <Calendar size={10} />
+                    {new Date(claim.dueDate).toLocaleDateString()}
+                  </div>
+                )}
+              </div>
+              <div className="flex justify-between items-end mt-2">
                 <Badge status={claim.status} className="text-[7px] font-black uppercase tracking-widest border-none px-1.5 py-0.5 h-auto w-fit">
                   {claim.status.replace('_', ' ')}
                 </Badge>
@@ -715,39 +909,120 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
       <main className={`flex-1 flex flex-col bg-white overflow-hidden ${selectedClaim ? 'flex' : 'hidden lg:flex'}`}>
         {selectedClaim ? (
           <div className="flex-1 flex flex-col animate-in slide-in-from-right-2 duration-500">
-            <header className="px-6 py-5 border-b border-slate-100 flex flex-col xl:flex-row xl:items-center justify-between sticky top-0 bg-white/95 backdrop-blur-md z-40 gap-4">
-              <div className="flex items-center gap-4">
-                <button onClick={() => setSelectedClaimId(null)} className="lg:hidden p-2 bg-zinc-100 rounded-xl"><ArrowLeft size={20} /></button>
-                <div>
-                  <h2 className="text-xl md:text-2xl font-black uppercase italic tracking-tighter leading-none text-black">AIMS Session: {selectedClaim.id}</h2>
-                  <div className="flex items-center gap-2 mt-1.5">
-                    <p className="text-[8px] font-bold uppercase tracking-widest text-[#E31B23] italic">Real-time Field Diagnostic Mode</p>
-                    <span className="text-[8px] font-black text-zinc-300">•</span>
-                    <span className="text-[8px] font-black uppercase tracking-widest text-zinc-400 italic">Manual Input Active</span>
-                    <span className="text-[8px] font-black text-zinc-300">•</span>
-                    <span className={`text-[8px] font-black uppercase italic ${selectedClaim.status === 'FIELD_AUDIT_ACTIVE' ? 'text-green-500' : 'text-zinc-400'}`}>
-                      {selectedClaim.status.replace('_', ' ')}
-                    </span>
-                  </div>
+            <header className="px-8 py-8 border-b border-slate-100 flex flex-col xl:flex-row xl:items-center justify-between sticky top-0 bg-white/95 backdrop-blur-md z-40 gap-6">
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <p className="text-[9px] font-black text-[#E31B23] uppercase tracking-[0.4em] italic leading-none">AIMS FIELD</p>
+                  <ChevronRight size={10} className="text-zinc-600" />
+                  <p className="text-[9px] font-black text-zinc-400 uppercase tracking-[0.4em] italic leading-none">
+                    {selectedClaim.id}
+                  </p>
                 </div>
+                <h2 className="text-4xl md:text-5xl font-black uppercase italic tracking-tighter leading-none text-black">Audit Session</h2>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="flex flex-col items-end gap-1">
+              <div className="flex items-center gap-4">
+                <div className="flex flex-col items-end gap-1 relative">
                   <Button 
                     onClick={handleRealTimeSync}
                     disabled={isSyncingAIMS || isClaimAlreadySynced}
-                    className={`h-11 px-6 text-[9px] font-black rounded-xl shadow-xl transition-all flex items-center gap-2 ${isOmniSynced ? 'bg-zinc-100 text-black border border-zinc-200' : 'bg-black text-white hover:bg-zinc-800'}`}
+                    className={`h-14 px-8 text-[10px] font-black rounded-2xl shadow-xl transition-all flex items-center gap-3 relative overflow-hidden ${isOmniSynced ? 'bg-zinc-100 text-black border border-zinc-200' : 'bg-black text-white hover:bg-zinc-800'}`}
                   >
-                    {isSyncingAIMS ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} className={isOmniSynced ? 'text-green-500' : ''} />}
+                    {isSyncingAIMS && (
+                      <div 
+                        className="absolute bottom-0 left-0 h-1 bg-[#E31B23] transition-all duration-300" 
+                        style={{ width: `${totalSyncProgress}%` }}
+                      />
+                    )}
+                    {isSyncingAIMS ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} className={isOmniSynced ? 'text-green-500' : ''} />}
                     {isSyncingAIMS ? 'SYNCING...' : isOmniSynced ? 'AIMS CONNECTED' : 'LIVE AIMS SYNC'}
                   </Button>
-                  {lastSyncedAt && (
+                  
+                  {isSyncingAIMS && (
+                    <div className="absolute top-full right-0 mt-4 w-72 bg-white border border-zinc-100 shadow-[0_20px_50px_rgba(0,0,0,0.15)] rounded-[32px] p-6 z-[100] animate-in slide-in-from-top-2 duration-300 space-y-6">
+                      <div className="flex items-center justify-between pb-4 border-b border-zinc-50">
+                        <div className="flex items-center gap-2">
+                          <Activity size={14} className="text-[#E31B23] animate-pulse" />
+                          <span className="text-[10px] font-black uppercase tracking-widest italic text-black">AIMS Telemetry</span>
+                        </div>
+                        <span className="text-[10px] font-black italic text-[#E31B23]">{totalSyncProgress}%</span>
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="h-2 bg-zinc-50 rounded-full overflow-hidden border border-zinc-100">
+                          <div 
+                            className="h-full bg-[#E31B23] transition-all duration-500 shadow-[0_0_15px_rgba(227,27,35,0.4)]" 
+                            style={{ width: `${totalSyncProgress}%` }}
+                          />
+                        </div>
+                        <p className="text-[7px] font-black text-zinc-400 uppercase tracking-widest text-right italic">Global Sync Matrix</p>
+                      </div>
+
+                      <div className="space-y-5">
+                        {[
+                          { id: 'connection', label: 'Handshake', icon: <Link2 size={12} /> },
+                          { id: 'photos', label: 'Evidence', icon: <Camera size={12} /> },
+                          { id: 'notes', label: 'Notes', icon: <FileText size={12} /> },
+                          { id: 'status', label: 'Registry', icon: <RefreshCw size={12} /> }
+                        ].map(stage => {
+                          const progress = syncProgress[stage.id as keyof typeof syncProgress];
+                          const isComplete = progress === 100;
+                          const isActive = progress > 0 && progress < 100;
+                          
+                          return (
+                            <div key={stage.id} className="space-y-2 group">
+                              <div className="flex justify-between items-center">
+                                <div className="flex items-center gap-2">
+                                  <div className={`p-1.5 rounded-lg transition-colors ${isComplete ? 'bg-green-50 text-green-600' : isActive ? 'bg-red-50 text-[#E31B23]' : 'bg-zinc-50 text-zinc-400'}`}>
+                                    <div className={isActive ? 'animate-spin' : ''}>
+                                      {stage.icon}
+                                    </div>
+                                  </div>
+                                  <span className={`text-[9px] font-black uppercase tracking-widest italic transition-colors ${isComplete ? 'text-green-600' : isActive ? 'text-black' : 'text-zinc-400'}`}>
+                                    {stage.label}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {isComplete && <Check size={10} className="text-green-600" />}
+                                  <span className={`text-[9px] font-black italic ${isComplete ? 'text-green-600' : isActive ? 'text-black' : 'text-zinc-300'}`}>
+                                    {progress}%
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="h-1 bg-zinc-50 rounded-full overflow-hidden">
+                                <div 
+                                  className={`h-full transition-all duration-300 ${isComplete ? 'bg-green-500' : 'bg-[#E31B23]'}`} 
+                                  style={{ width: `${progress}%` }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="pt-2 border-t border-zinc-50">
+                        <p className="text-[7px] font-bold text-zinc-400 uppercase tracking-[0.2em] italic text-center animate-pulse">
+                          {syncStatus}...
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {lastSyncedAt && !isSyncingAIMS && (
                     <p className="text-[7px] font-bold text-zinc-400 uppercase tracking-widest italic mr-2">Last Sync: {lastSyncedAt}</p>
                   )}
                 </div>
                 <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 shadow-inner">
                   {['audit', 'shop', 'schedule', 'comms'].map(t => (
-                    <button key={t} onClick={() => setActiveConsoleTab(t as any)} className={`px-4 py-2 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${activeConsoleTab === t ? 'bg-black text-white shadow-md' : 'text-zinc-400'}`}>
+                    <button 
+                      key={t} 
+                      onClick={() => {
+                        setActiveConsoleTab(t as any);
+                        if (t === 'audit') onTabChange('visits');
+                        else if (t === 'schedule') onTabChange('schedule');
+                        else if (t === 'comms') onTabChange('comms');
+                      }} 
+                      className={`px-4 py-2 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${activeConsoleTab === t ? 'bg-black text-white shadow-md' : 'text-zinc-400'}`}
+                    >
                       {t === 'audit' ? 'Assessment' : t === 'comms' ? 'Direct Chat' : t}
                     </button>
                   ))}
@@ -766,8 +1041,8 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
               <div className="max-w-6xl mx-auto space-y-8">
                 {activeConsoleTab === 'audit' && (
                   <div className="space-y-8 animate-in fade-in duration-500">
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                      <Card className="lg:col-span-8 p-8 bg-black text-white rounded-[32px] border-none shadow-2xl relative overflow-hidden group">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-8">
+                      <Card className="md:col-span-2 lg:col-span-8 p-8 bg-black text-white rounded-[32px] border-none shadow-2xl relative overflow-hidden group">
                         <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none group-hover:scale-110 transition-all duration-1000"><Smartphone size={160} /></div>
                         <div className="relative z-10 space-y-8">
                           <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
@@ -793,7 +1068,7 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                         </div>
                       </Card>
 
-                      <Card className="lg:col-span-4 p-8 bg-zinc-50 border-2 border-slate-100 rounded-[32px] shadow-xl flex flex-col justify-between hover:border-black transition-colors">
+                      <Card className="md:col-span-2 lg:col-span-4 p-8 bg-zinc-50 border-2 border-slate-100 rounded-[32px] shadow-xl flex flex-col justify-between hover:border-black transition-colors">
                          <div className="space-y-6">
                             <div className="flex items-center gap-3">
                                <div className="p-2.5 bg-black text-white rounded-xl shadow-lg shadow-black/10"><MessageSquare size={18} /></div>
@@ -806,8 +1081,8 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                       </Card>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                      <div className="lg:col-span-8 space-y-8">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-8">
+                      <div className="md:col-span-2 lg:col-span-8 space-y-8">
                         {/* Existing Audit Hotspots and Verification Node */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                           <Card className="p-8 border-none shadow-xl bg-white rounded-[32px] space-y-6">
@@ -990,12 +1265,20 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                         </Card>
                       </div>
 
-                      <div className="lg:col-span-4 space-y-8">
+                      <div className="md:col-span-2 lg:col-span-4 space-y-8">
                         {isOmniSynced && (
                           <Card className="p-6 bg-white border-2 border-green-100 rounded-[32px] shadow-xl space-y-4 animate-in slide-in-from-top-4 duration-500">
-                            <div className="flex items-center gap-3">
-                              <div className="p-2.5 bg-green-50 text-green-600 rounded-xl"><ShieldCheck size={20}/></div>
-                              <h3 className="text-xs font-black uppercase tracking-widest italic text-black">Live Handshake Status</h3>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className="p-2.5 bg-green-50 text-green-600 rounded-xl"><ShieldCheck size={20}/></div>
+                                <h3 className="text-xs font-black uppercase tracking-widest italic text-black">Live Handshake Status</h3>
+                              </div>
+                              {isSyncingAIMS && (
+                                <div className="flex items-center gap-2 text-[8px] font-black text-green-600 uppercase tracking-widest animate-pulse">
+                                  <RefreshCw size={10} className="animate-spin" />
+                                  Data Stream
+                                </div>
+                              )}
                             </div>
                             <p className="text-[10px] font-medium text-zinc-500 italic leading-relaxed">
                               Mobile node synchronized with desktop session. Captured evidence and chat logs will propagate to the hub in real-time.
@@ -1125,6 +1408,13 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                                 >
                                  {isEstimating ? <Loader2 size={16} className="animate-spin" /> : 'RECALCULATE CONSISTENCY'}
                                </Button>
+
+                               {expertInsight && (
+                                 <div className="pt-4 border-t border-white/5 animate-in fade-in">
+                                    <p className="text-[8px] font-black text-[#E31B23] uppercase tracking-widest mb-2 italic">Expert Insight</p>
+                                    <p className="text-[10px] font-bold text-zinc-400 italic leading-relaxed">"{expertInsight}"</p>
+                                 </div>
+                               )}
                             </div>
 
                             <div className="p-6 bg-zinc-900 border border-white/5 rounded-3xl space-y-4">
@@ -1173,10 +1463,21 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                           </div>
                         </Card>
 
-                        <Card className="p-8 bg-zinc-900 text-white rounded-[32px] border-none shadow-xl h-[280px] flex flex-col hover:border-zinc-700 transition-colors">
-                          <h3 className="text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-3 italic text-zinc-400 mb-6 shrink-0"><Zap size={16} className="text-[#E31B23]" /> Pulse Telemetry</h3>
-                          <div className="flex-1 overflow-hidden">
-                             <NeuralFeed logs={handshakeLogs} />
+                        <Card className="p-8 bg-zinc-950 text-white rounded-[32px] border-none shadow-2xl space-y-8 animate-in slide-in-from-right-4 duration-1000">
+                          <div className="flex justify-between items-center">
+                            <h3 className="text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-3 italic text-zinc-400">
+                              <Cpu size={16} className="text-[#E31B23]" /> Neural Command Center
+                            </h3>
+                            <Badge className="bg-[#E31B23]/10 border-[#E31B23]/20 text-[#E31B23] text-[7px] font-black italic rounded-lg px-2 py-0.5">V3.1 CORE ACTIVE</Badge>
+                          </div>
+
+                          <NeuralInsights damagedParts={damagedParts} damageReason={damageReason} />
+
+                          <div className="pt-6 border-t border-white/5">
+                            <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest mb-4 italic">System Telemetry</p>
+                            <div className="h-[180px] overflow-hidden">
+                               <NeuralFeed logs={handshakeLogs} />
+                            </div>
                           </div>
                         </Card>
 
@@ -1518,20 +1819,137 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
             </div>
           </div>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-center p-10 space-y-10 animate-in fade-in duration-700 relative bg-white">
+          <div className="flex-1 flex flex-col animate-in fade-in duration-700 relative bg-white">
              <button onClick={onLogout} className="absolute top-8 right-8 p-3 bg-slate-50 rounded-xl text-slate-400 hover:text-black transition-all text-[9px] font-black uppercase tracking-widest italic group">
                <span className="group-hover:mr-2 transition-all">SIGN OUT</span> <LogOut size={14} className="inline group-hover:scale-110" />
              </button>
-             <div className="w-56 h-56 bg-white border-2 border-slate-100 rounded-[64px] flex items-center justify-center shadow-2xl transform hover:rotate-3 transition-all duration-1000 group cursor-pointer active:scale-95">
-                <ClipboardList size={80} className="text-zinc-100 group-hover:text-[#E31B23] transition-colors" />
-             </div>
-             <div className="space-y-6 max-w-sm">
-                <h2 className="text-4xl font-black uppercase tracking-tighter italic text-black leading-none">Ready for Audit</h2>
-                <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-widest leading-relaxed italic">Select an inspection area to initialize the Comparative Audit process.</p>
-             </div>
+
+             {activeTab === 'schedule' ? (
+               <div className="flex-1 p-10 space-y-10 overflow-y-auto">
+                  <div className="space-y-2">
+                    <h2 className="text-4xl font-black uppercase tracking-tighter italic text-black leading-none">Field Schedule</h2>
+                    <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-widest italic">Your upcoming inspection assignments</p>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {assignedClaims.map(claim => (
+                      <Card key={claim.id} className="p-6 space-y-4 hover:border-black transition-all cursor-pointer group" onClick={() => selectClaim(claim.id)}>
+                        <div className="flex justify-between items-start">
+                          <Badge className="bg-black text-white border-none rounded-md px-2 py-0.5 text-[8px] font-bold">{claim.id}</Badge>
+                          <div className="flex items-center gap-1 text-[8px] font-black text-[#E31B23] uppercase italic">
+                            <Calendar size={10} />
+                            {claim.dueDate ? new Date(claim.dueDate).toLocaleDateString() : 'TBD'}
+                          </div>
+                        </div>
+                        <h3 className="text-lg font-black text-black uppercase italic leading-none group-hover:text-[#E31B23] transition-colors">{claim.car}</h3>
+                        <p className="text-[10px] font-bold text-zinc-400 uppercase italic">{claim.owner}</p>
+                        <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
+                          <span className="text-[9px] font-black uppercase italic text-zinc-500">{claim.distance}</span>
+                          <Button className="h-8 px-4 text-[8px] font-black rounded-lg bg-zinc-100 text-black hover:bg-black hover:text-white">VIEW DETAILS</Button>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+               </div>
+             ) : activeTab === 'comms' ? (
+               <div className="flex-1 p-10 space-y-10 overflow-y-auto">
+                  <div className="space-y-2">
+                    <h2 className="text-4xl font-black uppercase tracking-tighter italic text-black leading-none">Comms Hub</h2>
+                    <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-widest italic">Direct communication with customers and support</p>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {assignedClaims.map(claim => (
+                      <Card key={claim.id} className="p-6 flex items-center gap-6 hover:shadow-xl transition-all cursor-pointer" onClick={() => selectClaim(claim.id)}>
+                        <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-400">
+                          <MessageCircle size={32} />
+                        </div>
+                        <div className="flex-1 space-y-1">
+                          <h3 className="text-sm font-black text-black uppercase italic leading-none">{claim.owner}</h3>
+                          <p className="text-[9px] font-bold text-zinc-400 uppercase italic">{claim.car}</p>
+                          <p className="text-[10px] text-zinc-500 italic line-clamp-1 mt-2">
+                            {claimChats[claim.id]?.[claimChats[claim.id].length - 1]?.text || 'No recent messages'}
+                          </p>
+                        </div>
+                        <ChevronRight size={20} className="text-zinc-200" />
+                      </Card>
+                    ))}
+                  </div>
+               </div>
+             ) : (
+               <div className="flex-1 flex flex-col items-center justify-center text-center p-10 space-y-10">
+                 <div className="w-56 h-56 bg-white border-2 border-slate-100 rounded-[64px] flex items-center justify-center shadow-2xl transform hover:rotate-3 transition-all duration-1000 group cursor-pointer active:scale-95">
+                    <ClipboardList size={80} className="text-zinc-100 group-hover:text-[#E31B23] transition-colors" />
+                 </div>
+                 <div className="space-y-6 max-w-sm">
+                    <h2 className="text-4xl font-black uppercase tracking-tighter italic text-black leading-none">Ready for Audit</h2>
+                    <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-widest leading-relaxed italic">Select an inspection area to initialize the Comparative Audit process.</p>
+                 </div>
+               </div>
+             )}
           </div>
         )}
       </main>
+
+      {/* Mobile Simulator Toggle */}
+      <button 
+        onClick={() => setShowMobileSimulator(!showMobileSimulator)}
+        className="fixed bottom-8 right-8 z-[1000] p-4 bg-black text-white rounded-full shadow-2xl hover:scale-110 transition-all border-2 border-white/20 flex items-center gap-3"
+      >
+        <Smartphone size={20} />
+        <span className="text-[10px] font-black uppercase tracking-widest hidden md:block">Simulate Mobile</span>
+      </button>
+
+      {/* Mobile Simulator UI */}
+      {showMobileSimulator && (
+        <div className="fixed bottom-24 right-8 z-[1000] w-[280px] h-[500px] bg-zinc-900 rounded-[40px] border-8 border-zinc-800 shadow-2xl overflow-hidden flex flex-col animate-in slide-in-from-bottom-8 duration-500">
+          <div className="h-6 w-32 bg-zinc-800 absolute top-0 left-1/2 -translate-x-1/2 rounded-b-2xl z-20" />
+          <div className="flex-1 bg-white flex flex-col">
+            <div className="p-6 pt-10 bg-zinc-950 text-white space-y-1">
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-[#E31B23]">AIMS Mobile</h4>
+              <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest">Field Assistant Node</p>
+            </div>
+            
+            <div className="flex-1 p-6 flex flex-col justify-center items-center text-center space-y-6">
+              {!mobileOtp ? (
+                <div className="space-y-4">
+                  <div className="w-16 h-16 bg-zinc-50 rounded-full flex items-center justify-center mx-auto">
+                    <SmartphoneNfc size={32} className="text-zinc-300" />
+                  </div>
+                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest leading-relaxed">
+                    Awaiting handshake signal from desktop console...
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-6 animate-in zoom-in-95">
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-black uppercase text-zinc-400 italic">Security Code Received</p>
+                    <div className="bg-zinc-50 border-2 border-zinc-100 rounded-2xl p-6">
+                      <span className="text-3xl font-black tracking-[0.2em] text-black italic">{mobileOtp}</span>
+                    </div>
+                  </div>
+                  <div className="p-4 bg-blue-50 text-blue-600 rounded-xl text-[9px] font-bold uppercase tracking-widest leading-relaxed">
+                    Enter this code on your desktop console to establish the secure link.
+                  </div>
+                  <Button 
+                    onClick={() => {
+                      if (socketRef.current && selectedClaimId) {
+                        socketRef.current.emit('mobile-connected', { claimId: selectedClaimId, device: 'iPhone 15 Pro' });
+                        setMobileOtp(null);
+                      }
+                    }}
+                    className="w-full h-12 bg-black text-white rounded-xl text-[10px] font-black italic"
+                  >
+                    CONFIRM HANDSHAKE
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-zinc-100 flex justify-center">
+              <div className="w-10 h-1 bg-zinc-200 rounded-full" />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Sync Handshake Modal */}
       {showSyncModal && (
@@ -1636,15 +2054,23 @@ const AssessorDashboard: React.FC<AssessorDashboardProps> = ({ onLogout, session
                   <div className="py-12 flex flex-col items-center gap-8">
                     <div className="relative">
                       <div className="absolute inset-0 bg-[#E31B23] blur-3xl opacity-10 animate-pulse" />
-                      <Loader2 size={64} className="animate-spin text-[#E31B23] relative z-10" />
+                      <div className="relative z-10 w-20 h-20 flex items-center justify-center">
+                        <Loader2 size={64} className="animate-spin text-[#E31B23]" />
+                        <SmartphoneNfc size={24} className="absolute text-black animate-pulse" />
+                      </div>
                     </div>
-                    <div className="space-y-2 text-center">
-                      <p className="text-[10px] font-black uppercase tracking-[0.3em] text-black italic">
-                        {isSendingOtp ? 'Requesting Secure Code...' : 'Finalizing RSA Link...'}
-                      </p>
-                      <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">
-                        {isSendingOtp ? `Contacting device node at ${phoneNumber}` : 'Establishing encrypted data tunnel'}
-                      </p>
+                    <div className="space-y-4 text-center w-full max-w-[200px]">
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-black uppercase tracking-[0.3em] text-black italic">
+                          {isSendingOtp ? 'Requesting Auth...' : 'Finalizing Link...'}
+                        </p>
+                        <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">
+                          {isSendingOtp ? `Contacting device node` : 'Establishing data tunnel'}
+                        </p>
+                      </div>
+                      <div className="h-1 bg-zinc-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-[#E31B23] w-1/2 animate-[shimmer_2s_infinite] origin-left" />
+                      </div>
                     </div>
                   </div>
                 )}
